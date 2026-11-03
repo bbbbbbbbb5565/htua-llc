@@ -21,7 +21,6 @@ local KEY_FILE = "CLL_Key.txt"
 local CURRENT_AUTH_URL = 1
 -- ===========================================
 
--- Theme matching CLL menu
 local Theme = {
 	Bg = Color3.fromRGB(13, 13, 14),
 	Panel = Color3.fromRGB(17, 17, 18),
@@ -36,43 +35,33 @@ local Theme = {
 	Accent = Color3.fromRGB(92, 126, 255),
 }
 
--- Global variables
 _G.CLL_Auth = nil
 _G.CLL_Whitelist = {}
 
--- Utility functions
 local function getUserId()
     return tostring(LocalPlayer.UserId)
 end
 
 local function saveKey(key)
     if writefile then
-        pcall(function()
-            writefile(KEY_FILE, key)
-        end)
+        pcall(function() writefile(KEY_FILE, key) end)
     end
 end
 
 local function loadKey()
     if readfile and isfile and isfile(KEY_FILE) then
-        local success, key = pcall(function()
-            return readfile(KEY_FILE)
-        end)
-        if success and key and key ~= "" then
-            return key
-        end
+        local success, key = pcall(function() return readfile(KEY_FILE) end)
+        if success and key and key ~= "" then return key end
     end
     return nil
 end
 
--- Check key with API
 local function checkKey(key, retry, urlIndex)
     retry = retry or 0
     urlIndex = urlIndex or 1
-    
     local AUTH_URL = AUTH_URLS[urlIndex]
     
-    -- Отправляем только key и userid, HWID удален
+    -- Отправляем ТОЛЬКО ключ и userid
     local body = HttpService:JSONEncode({
         key = key,
         userid = tostring(getUserId())
@@ -81,11 +70,7 @@ local function checkKey(key, retry, urlIndex)
     print("[CLL AUTH] Checking key:", key)
     
     local httpRequest = request or http_request or (syn and syn.request) or (http and http.request)
-    
-    if not httpRequest then
-        warn("[CLL AUTH] No HTTP request function available")
-        return {status = "offline", message = "Executor not supported"}
-    end
+    if not httpRequest then return {status = "offline", message = "Executor not supported"} end
     
     local success, res = pcall(function()
         return httpRequest({
@@ -101,39 +86,22 @@ local function checkKey(key, retry, urlIndex)
     
     if not success then
         warn("[CLL AUTH] Request failed:", res)
-        if urlIndex < #AUTH_URLS then
-            return checkKey(key, 0, urlIndex + 1)
-        end
         if retry < 2 then
             task.wait(2)
             return checkKey(key, retry + 1, urlIndex)
         end
-        return {status = "offline", message = "Cannot connect: " .. tostring(res)}
+        return {status = "offline", message = "Cannot connect"}
     end
     
-    if not res or not res.Body then
-        return {status = "offline", message = "Server not responding."}
-    end
-    
-    if res.StatusCode and res.StatusCode ~= 200 then
-        return {status = "offline", message = "Server error (HTTP " .. res.StatusCode .. ")"}
-    end
-    
+    if not res or not res.Body then return {status = "offline", message = "Empty response"} end
     print("[CLL AUTH] Response:", res.Body)
     
-    local ok, data = pcall(function()
-        return HttpService:JSONDecode(res.Body)
-    end)
+    local ok, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
+    if not ok then return {status = "offline", message = "JSON error"} end
     
-    if not ok then
-        return {status = "offline", message = "Invalid server response"}
-    end
-    
-    CURRENT_AUTH_URL = urlIndex
     return data
 end
 
--- Apply auth data
 local function applyAuth(data)
     _G.CLL_Auth = {
         status = data.status,
@@ -141,7 +109,6 @@ local function applyAuth(data)
         type = data.type,
         expires_at = data.expires_at
     }
-    
     _G.CLL_Whitelist = {}
     if data.whitelist then
         for _, id in ipairs(data.whitelist) do
@@ -149,8 +116,6 @@ local function applyAuth(data)
         end
     end
 end
-
--- ============== UI CREATION ==============
 
 local function CreateAuthUI(onSuccess)
     if game:GetService("CoreGui"):FindFirstChild("CLL_AuthUI") then
@@ -191,7 +156,6 @@ local function CreateAuthUI(onSuccess)
         Position = UDim2.fromScale(0.5, 0.5),
         BackgroundColor3 = Theme.Bg,
         BorderSizePixel = 0,
-        ClipsDescendants = false,
         ZIndex = 2,
         GroupTransparency = 1,
         Parent = screenGui
@@ -199,10 +163,11 @@ local function CreateAuthUI(onSuccess)
     
     local uiScale = new("UIScale", { Scale = 0.85, Parent = mainFrame })
     
+    -- ИСПРАВЛЕННЫЙ КРЕСТИК (Буква X вместо эмодзи)
     local closeBtn = new("TextButton", {
-        Text = "✕",
+        Text = "X",
         Font = Enum.Font.GothamBold,
-        TextSize = 18,
+        TextSize = 20,
         TextColor3 = Theme.Dim,
         BackgroundTransparency = 1,
         Size = UDim2.fromOffset(30, 30),
@@ -268,16 +233,17 @@ local function CreateAuthUI(onSuccess)
     }, { corner(10), stroke() })
     local inputStroke = inputFrame:FindFirstChildOfClass("UIStroke")
     
+    -- ИСПРАВЛЕННАЯ ИКОНКА КЛЮЧА (Меньше кольцо, тоньше обводка)
     local keyIconHolder = new("Frame", {
         Size = UDim2.fromOffset(50, 50),
         BackgroundTransparency = 1,
         ZIndex = 3,
         Parent = inputFrame
     })
-    new("Frame", { Size = UDim2.fromOffset(14, 14), Position = UDim2.fromOffset(18, 16), BackgroundTransparency = 1, ZIndex = 3, Parent = keyIconHolder }, { new("UICorner", { CornerRadius = UDim.new(1, 0) }), stroke(Theme.Dim, 2) })
-    new("Frame", { Size = UDim2.fromOffset(10, 2), Position = UDim2.fromOffset(28, 22), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, ZIndex = 3, Parent = keyIconHolder })
-    new("Frame", { Size = UDim2.fromOffset(2, 4), Position = UDim2.fromOffset(34, 22), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, ZIndex = 3, Parent = keyIconHolder })
-    new("Frame", { Size = UDim2.fromOffset(2, 3), Position = UDim2.fromOffset(31, 22), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, ZIndex = 3, Parent = keyIconHolder })
+    new("Frame", { Size = UDim2.fromOffset(12, 12), Position = UDim2.fromOffset(20, 19), BackgroundTransparency = 1, ZIndex = 3, Parent = keyIconHolder }, { new("UICorner", { CornerRadius = UDim.new(1, 0) }), stroke(Theme.Dim, 1.5) })
+    new("Frame", { Size = UDim2.fromOffset(10, 2), Position = UDim2.fromOffset(30, 24), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, ZIndex = 3, Parent = keyIconHolder })
+    new("Frame", { Size = UDim2.fromOffset(2, 4), Position = UDim2.fromOffset(36, 24), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, ZIndex = 3, Parent = keyIconHolder })
+    new("Frame", { Size = UDim2.fromOffset(2, 3), Position = UDim2.fromOffset(33, 24), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, ZIndex = 3, Parent = keyIconHolder })
     
     local keyInput = new("TextBox", {
         Size = UDim2.new(1, -60, 1, 0),
@@ -338,30 +304,16 @@ local function CreateAuthUI(onSuccess)
     TweenService:Create(uiScale, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
     TweenService:Create(mainFrame, TweenInfo.new(0.4), { GroupTransparency = 0 }):Play()
     
-    verifyButton.MouseEnter:Connect(function()
-        TweenService:Create(verifyButton, TweenInfo.new(0.2), { BackgroundColor3 = Color3.fromRGB(112, 146, 255) }):Play()
-    end)
-    verifyButton.MouseLeave:Connect(function()
-        TweenService:Create(verifyButton, TweenInfo.new(0.2), { BackgroundColor3 = Theme.Accent }):Play()
-    end)
+    verifyButton.MouseEnter:Connect(function() TweenService:Create(verifyButton, TweenInfo.new(0.2), { BackgroundColor3 = Color3.fromRGB(112, 146, 255) }):Play() end)
+    verifyButton.MouseLeave:Connect(function() TweenService:Create(verifyButton, TweenInfo.new(0.2), { BackgroundColor3 = Theme.Accent }):Play() end)
     
-    keyInput.Focused:Connect(function()
-        if inputStroke then
-            TweenService:Create(inputStroke, TweenInfo.new(0.2), { Color = Theme.Accent, Thickness = 2 }):Play()
-        end
-    end)
-    
-    keyInput.FocusLost:Connect(function()
-        if inputStroke then
-            TweenService:Create(inputStroke, TweenInfo.new(0.2), { Color = Theme.Stroke, Thickness = 1 }):Play()
-        end
-    end)
+    keyInput.Focused:Connect(function() if inputStroke then TweenService:Create(inputStroke, TweenInfo.new(0.2), { Color = Theme.Accent, Thickness = 2 }):Play() end end)
+    keyInput.FocusLost:Connect(function() if inputStroke then TweenService:Create(inputStroke, TweenInfo.new(0.2), { Color = Theme.Stroke, Thickness = 1 }):Play() end end)
     
     local function VerifyKey()
         local key = keyInput.Text:gsub("%s+", "")
-        
         if key == "" then
-            statusLabel.Text = "❌ Please enter a key"
+            statusLabel.Text = "Please enter a key"
             statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
             statusLabel.Visible = true
             return
@@ -372,25 +324,18 @@ local function CreateAuthUI(onSuccess)
         verifyButton.Active = false
         keyInput.Active = false
         
-        statusLabel.Text = "🔄 Connecting to server..."
+        statusLabel.Text = "Connecting to server..."
         statusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
         statusLabel.Visible = true
         
         task.spawn(function()
-            wait(1)
-            if verifyButton.Text == "Verifying..." then
-                statusLabel.Text = "🔄 Waking up server (first time may take 30s)..."
-            end
-            
             local data = checkKey(key)
             
             if data.status == "valid" then
-                statusLabel.Text = "✅ Key verified! Loading..."
+                statusLabel.Text = "Key verified! Loading..."
                 statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
-                
                 saveKey(key)
                 applyAuth(data)
-                
                 wait(0.5)
                 
                 TweenService:Create(uiScale, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In), { Scale = 0.85 }):Play()
@@ -401,11 +346,10 @@ local function CreateAuthUI(onSuccess)
                 wait(0.4)
                 blur:Destroy()
                 screenGui:Destroy()
-                
                 onSuccess()
             else
                 local messages = {
-                    invalid = "Invalid key",
+                    invalid = "Invalid key (data error)",
                     banned = "Key is banned",
                     expired = "Key expired",
                     userid_mismatch = "Key bound to another account",
@@ -413,66 +357,33 @@ local function CreateAuthUI(onSuccess)
                 }
                 
                 local errorMsg = messages[data.status] or data.status or "Unknown error"
-                statusLabel.Text = "❌ " .. errorMsg
+                statusLabel.Text = errorMsg
                 statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-                
-                print("[CLL AUTH] Error:", errorMsg)
-                if data.message then
-                    print("[CLL AUTH] Details:", data.message)
-                end
                 
                 verifyButton.Text = "Verify Key"
                 verifyButton.BackgroundColor3 = Theme.Accent
                 verifyButton.Active = true
                 keyInput.Active = true
-                
-                local originalPos = UDim2.fromScale(0.5, 0.5)
-                for i = 1, 3 do
-                    TweenService:Create(mainFrame, TweenInfo.new(0.05), { Position = UDim2.new(0.5, 12, 0.5, 0) }):Play()
-                    wait(0.05)
-                    TweenService:Create(mainFrame, TweenInfo.new(0.05), { Position = UDim2.new(0.5, -12, 0.5, 0) }):Play()
-                    wait(0.05)
-                end
-                TweenService:Create(mainFrame, TweenInfo.new(0.1), { Position = originalPos }):Play()
             end
         end)
     end
     
     verifyButton.MouseButton1Click:Connect(VerifyKey)
-    
-    keyInput.FocusLost:Connect(function(enterPressed)
-        if enterPressed and verifyButton.Active then
-            VerifyKey()
-        end
-    end)
-    
+    keyInput.FocusLost:Connect(function(enterPressed) if enterPressed and verifyButton.Active then VerifyKey() end end)
     task.wait(0.5)
     keyInput:CaptureFocus()
 end
 
 local function LoadMainScript()
-    print("[CLL] Loading main script...")
-    
     local success, err = pcall(function()
         loadstring(game:HttpGet(MAIN_SCRIPT_URL))()
     end)
-    
-    if not success then
-        warn("[CLL] Failed to load main script:", err)
-        game:GetService("StarterGui"):SetCore("SendNotification", {
-            Title = "CLL Error",
-            Text = "Failed to load cheat",
-            Duration = 10
-        })
-    end
+    if not success then warn("[CLL] Failed to load main script:", err) end
 end
-
--- ============== MAIN EXECUTION ==============
 
 local function ShowLoadingSplash()
     local splashGui = Instance.new("ScreenGui")
     splashGui.Name = "CLL_LoadingSplash"
-    splashGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     splashGui.ResetOnSpawn = false
     splashGui.IgnoreGuiInset = true
     splashGui.Parent = game:GetService("CoreGui")
@@ -494,82 +405,24 @@ local function ShowLoadingSplash()
     logo.TextColor3 = Color3.fromRGB(240, 240, 242)
     logo.Parent = bg
     
-    local loadingText = Instance.new("TextLabel")
-    loadingText.Size = UDim2.fromOffset(300, 30)
-    loadingText.Position = UDim2.fromScale(0.5, 0.55)
-    loadingText.AnchorPoint = Vector2.new(0.5, 0.5)
-    loadingText.BackgroundTransparency = 1
-    loadingText.Text = "Loading..."
-    loadingText.Font = Enum.Font.Gotham
-    loadingText.TextSize = 16
-    loadingText.TextColor3 = Color3.fromRGB(125, 125, 132)
-    loadingText.Parent = bg
-    
-    task.spawn(function()
-        local dots = {".", "..", "..."}
-        local i = 1
-        while splashGui.Parent do
-            loadingText.Text = "Loading" .. dots[i]
-            i = i % 3 + 1
-            wait(0.4)
-        end
-    end)
-    
-    bg.BackgroundTransparency = 1
-    logo.TextTransparency = 1
-    loadingText.TextTransparency = 1
-    
-    TweenService:Create(bg, TweenInfo.new(0.3), {BackgroundTransparency = 0}):Play()
-    TweenService:Create(logo, TweenInfo.new(0.3), {TextTransparency = 0}):Play()
-    TweenService:Create(loadingText, TweenInfo.new(0.3), {TextTransparency = 0}):Play()
-    
     return splashGui
 end
-
-local function HideLoadingSplash(splashGui)
-    if not splashGui or not splashGui.Parent then return end
-    
-    local bg = splashGui:FindFirstChild("Frame")
-    if bg then
-        TweenService:Create(bg, TweenInfo.new(0.3), {BackgroundTransparency = 1}):Play()
-        for _, child in ipairs(bg:GetChildren()) do
-            if child:IsA("TextLabel") then
-                TweenService:Create(child, TweenInfo.new(0.3), {TextTransparency = 1}):Play()
-            end
-        end
-    end
-    
-    wait(0.4)
-    splashGui:Destroy()
-end
-
-print("[CLL] Starting authentication...")
 
 local splash = ShowLoadingSplash()
 wait(0.5)
 
 local savedKey = loadKey()
 if savedKey then
-    print("[CLL] Found saved key, verifying...")
     local data = checkKey(savedKey)
-    
     if data.status == "valid" then
-        print("[CLL] ✅ Saved key valid!")
         applyAuth(data)
-        HideLoadingSplash(splash)
+        if splash then splash:Destroy() end
         LoadMainScript()
         return
     else
-        print("[CLL] ❌ Saved key invalid:", data.status)
-        if delfile and isfile and isfile(KEY_FILE) then
-            delfile(KEY_FILE)
-        end
+        if delfile and isfile and isfile(KEY_FILE) then delfile(KEY_FILE) end
     end
 end
 
-HideLoadingSplash(splash)
-
-print("[CLL] No valid key, showing auth UI...")
-CreateAuthUI(function()
-    LoadMainScript()
-end)
+if splash then splash:Destroy() end
+CreateAuthUI(function() LoadMainScript() end)
