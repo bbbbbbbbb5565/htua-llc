@@ -192,9 +192,9 @@ local function CreateAuthUI(onSuccess)
         }) 
     end
     
-    -- Main frame (CLL style)
+    -- Main frame (CLL style) - BIGGER SIZE
     local mainFrame = new("Frame", {
-        Size = UDim2.fromOffset(480, 310),
+        Size = UDim2.fromOffset(520, 360),
         Position = UDim2.fromScale(0.5, 0.5),
         AnchorPoint = Vector2.new(0.5, 0.5),
         BackgroundColor3 = Theme.Bg,
@@ -202,134 +202,147 @@ local function CreateAuthUI(onSuccess)
         Parent = screenGui
     }, { corner(20), stroke() })
     
-    -- Header
+    -- Auto-scale for different screen sizes
+    local uiScale = Instance.new("UIScale")
+    uiScale.Parent = mainFrame
+    
+    local function fitScreen()
+        local viewport = workspace.CurrentCamera.ViewportSize
+        local scale = math.min(viewport.X / 600, viewport.Y / 450, 1.2)
+        uiScale.Scale = math.max(scale, 0.7)
+    end
+    
+    fitScreen()
+    workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fitScreen)
+    
+    -- Header (bigger)
     local header = new("Frame", {
-        Size = UDim2.new(1, 0, 0, 70),
+        Size = UDim2.new(1, 0, 0, 85),
         BackgroundTransparency = 1,
         Parent = mainFrame
     })
     
-    -- Logo
+    -- Logo (bigger)
     local logo = new("TextLabel", {
         Text = "CLL",
         Font = Enum.Font.Michroma,
-        TextSize = 32,
+        TextSize = 42,
         TextColor3 = Theme.Text,
         BackgroundTransparency = 1,
-        Size = UDim2.fromOffset(100, 70),
-        Position = UDim2.fromOffset(25, 0),
+        Size = UDim2.fromOffset(150, 85),
+        Position = UDim2.fromOffset(30, 0),
         Parent = header
     })
     
-    -- Subtitle
+    -- Subtitle (adjusted)
     local subtitle = new("TextLabel", {
         Text = "Authentication",
         Font = Enum.Font.Gotham,
-        TextSize = 14,
+        TextSize = 15,
         TextColor3 = Theme.Dim,
         BackgroundTransparency = 1,
-        Size = UDim2.new(1, -25, 0, 20),
-        Position = UDim2.fromOffset(25, 85),
+        Size = UDim2.new(1, -30, 0, 25),
+        Position = UDim2.fromOffset(30, 105),
         TextXAlignment = Enum.TextXAlignment.Left,
         Parent = mainFrame
     })
     
-    -- Content panel
+    -- Content panel (bigger)
     local contentPanel = new("Frame", {
-        Size = UDim2.new(1, -50, 0, 140),
-        Position = UDim2.fromOffset(25, 120),
+        Size = UDim2.new(1, -60, 0, 160),
+        Position = UDim2.fromOffset(30, 145),
         BackgroundColor3 = Theme.Panel,
         BorderSizePixel = 0,
         Parent = mainFrame
     }, { corner(12), stroke() })
     
-    -- Key label
+    -- Key label (bigger)
     local keyLabel = new("TextLabel", {
         Text = "License Key",
         Font = Enum.Font.GothamMedium,
-        TextSize = 13,
+        TextSize = 14,
         TextColor3 = Theme.Dim,
         BackgroundTransparency = 1,
-        Size = UDim2.new(1, -30, 0, 20),
+        Size = UDim2.new(1, -30, 0, 25),
         Position = UDim2.fromOffset(15, 15),
         TextXAlignment = Enum.TextXAlignment.Left,
         Parent = contentPanel
     })
     
-    -- Key input frame
+    -- Key input frame (bigger)
     local inputFrame = new("Frame", {
-        Size = UDim2.new(1, -30, 0, 48),
-        Position = UDim2.fromOffset(15, 40),
+        Size = UDim2.new(1, -30, 0, 55),
+        Position = UDim2.fromOffset(15, 45),
         BackgroundColor3 = Theme.Row,
         BorderSizePixel = 0,
         Parent = contentPanel
     }, { corner(10), stroke() })
     
-    -- Key icon
+    -- Key icon (bigger)
     local keyIcon = new("TextLabel", {
         Text = "🔑",
         Font = Enum.Font.Gotham,
-        TextSize = 18,
+        TextSize = 22,
         TextColor3 = Theme.Dim,
         BackgroundTransparency = 1,
-        Size = UDim2.fromOffset(40, 48),
+        Size = UDim2.fromOffset(45, 55),
         Position = UDim2.fromOffset(5, 0),
         Parent = inputFrame
     })
     
-    -- Key input
+    -- Key input (bigger)
     local keyInput = new("TextBox", {
-        Size = UDim2.new(1, -50, 1, 0),
-        Position = UDim2.fromOffset(45, 0),
+        Size = UDim2.new(1, -55, 1, 0),
+        Position = UDim2.fromOffset(50, 0),
         BackgroundTransparency = 1,
         Text = "",
         PlaceholderText = "XXXX-XXXX-XXXX",
         PlaceholderColor3 = Theme.Dim,
         Font = Enum.Font.GothamMedium,
-        TextSize = 16,
+        TextSize = 18,
         TextColor3 = Theme.Text,
         TextXAlignment = Enum.TextXAlignment.Left,
         ClearTextOnFocus = false,
         Parent = inputFrame
     })
     
-    -- Status label
+    -- Status label (bigger)
     local statusLabel = new("TextLabel", {
         Text = "",
         Font = Enum.Font.Gotham,
-        TextSize = 12,
+        TextSize = 13,
         TextColor3 = Color3.fromRGB(255, 100, 100),
         BackgroundTransparency = 1,
-        Size = UDim2.new(1, -30, 0, 20),
-        Position = UDim2.fromOffset(15, 95),
+        Size = UDim2.new(1, -30, 0, 25),
+        Position = UDim2.fromOffset(15, 110),
         TextXAlignment = Enum.TextXAlignment.Left,
         Visible = false,
         Parent = contentPanel
     })
     
-    -- Verify button
+    -- Verify button (bigger)
     local verifyButton = new("TextButton", {
-        Size = UDim2.new(1, -50, 0, 50),
-        Position = UDim2.fromOffset(25, 270),
+        Size = UDim2.new(1, -60, 0, 55),
+        Position = UDim2.fromOffset(30, 318),
         BackgroundColor3 = Theme.Accent,
         BorderSizePixel = 0,
         Text = "Verify Key",
         Font = Enum.Font.GothamBold,
-        TextSize = 16,
+        TextSize = 18,
         TextColor3 = Color3.fromRGB(255, 255, 255),
         AutoButtonColor = false,
         Parent = mainFrame
     }, { corner(12) })
     
-    -- Footer text
+    -- Footer text (adjusted)
     local footerText = new("TextLabel", {
         Text = "Need a key? Contact admin in Discord",
         Font = Enum.Font.Gotham,
-        TextSize = 11,
+        TextSize = 12,
         TextColor3 = Theme.Dim,
         BackgroundTransparency = 1,
         Size = UDim2.new(1, 0, 0, 20),
-        Position = UDim2.fromOffset(0, 287),
+        Position = UDim2.fromOffset(0, 335),
         Parent = mainFrame
     })
     
@@ -339,7 +352,7 @@ local function CreateAuthUI(onSuccess)
     
     local enterTween = TweenService:Create(mainFrame, 
         TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), 
-        { Size = UDim2.fromOffset(480, 310), GroupTransparency = 0 }
+        { Size = UDim2.fromOffset(520, 360), GroupTransparency = 0 }
     )
     enterTween:Play()
     
@@ -509,7 +522,93 @@ end
 
 -- ============== MAIN EXECUTION ==============
 
+-- Show loading splash
+local function ShowLoadingSplash()
+    local splashGui = Instance.new("ScreenGui")
+    splashGui.Name = "CLL_LoadingSplash"
+    splashGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    splashGui.ResetOnSpawn = false
+    splashGui.IgnoreGuiInset = true
+    splashGui.Parent = game:GetService("CoreGui")
+    
+    -- Background
+    local bg = Instance.new("Frame")
+    bg.Size = UDim2.fromScale(1, 1)
+    bg.BackgroundColor3 = Color3.fromRGB(13, 13, 14)
+    bg.BorderSizePixel = 0
+    bg.Parent = splashGui
+    
+    -- Logo
+    local logo = Instance.new("TextLabel")
+    logo.Size = UDim2.fromOffset(200, 80)
+    logo.Position = UDim2.fromScale(0.5, 0.45)
+    logo.AnchorPoint = Vector2.new(0.5, 0.5)
+    logo.BackgroundTransparency = 1
+    logo.Text = "CLL"
+    logo.Font = Enum.Font.Michroma
+    logo.TextSize = 48
+    logo.TextColor3 = Color3.fromRGB(240, 240, 242)
+    logo.Parent = bg
+    
+    -- Loading text
+    local loadingText = Instance.new("TextLabel")
+    loadingText.Size = UDim2.fromOffset(300, 30)
+    loadingText.Position = UDim2.fromScale(0.5, 0.55)
+    loadingText.AnchorPoint = Vector2.new(0.5, 0.5)
+    loadingText.BackgroundTransparency = 1
+    loadingText.Text = "Loading..."
+    loadingText.Font = Enum.Font.Gotham
+    loadingText.TextSize = 16
+    loadingText.TextColor3 = Color3.fromRGB(125, 125, 132)
+    loadingText.Parent = bg
+    
+    -- Animated dots
+    task.spawn(function()
+        local dots = {".", "..", "..."}
+        local i = 1
+        while splashGui.Parent do
+            loadingText.Text = "Loading" .. dots[i]
+            i = i % 3 + 1
+            wait(0.4)
+        end
+    end)
+    
+    -- Fade in
+    bg.BackgroundTransparency = 1
+    logo.TextTransparency = 1
+    loadingText.TextTransparency = 1
+    
+    TweenService:Create(bg, TweenInfo.new(0.3), {BackgroundTransparency = 0}):Play()
+    TweenService:Create(logo, TweenInfo.new(0.3), {TextTransparency = 0}):Play()
+    TweenService:Create(loadingText, TweenInfo.new(0.3), {TextTransparency = 0}):Play()
+    
+    return splashGui
+end
+
+local function HideLoadingSplash(splashGui)
+    if not splashGui or not splashGui.Parent then return end
+    
+    local bg = splashGui:FindFirstChild("Frame")
+    if bg then
+        TweenService:Create(bg, TweenInfo.new(0.3), {BackgroundTransparency = 1}):Play()
+        for _, child in ipairs(bg:GetChildren()) do
+            if child:IsA("TextLabel") then
+                TweenService:Create(child, TweenInfo.new(0.3), {TextTransparency = 1}):Play()
+            end
+        end
+    end
+    
+    wait(0.4)
+    splashGui:Destroy()
+end
+
 print("[CLL] Starting authentication...")
+
+-- Show loading splash
+local splash = ShowLoadingSplash()
+
+-- Wait a bit for splash to show
+wait(0.5)
 
 -- Try local key first
 local savedKey = loadKey()
@@ -520,6 +619,7 @@ if savedKey then
     if data.status == "valid" then
         print("[CLL] ✅ Saved key valid!")
         applyAuth(data)
+        HideLoadingSplash(splash)
         CreateProfileUI()
         LoadMainScript()
         return
@@ -531,7 +631,9 @@ if savedKey then
     end
 end
 
--- Show UI for key input
+-- Hide splash and show auth UI
+HideLoadingSplash(splash)
+
 print("[CLL] No valid key, showing auth UI...")
 CreateAuthUI(function()
     CreateProfileUI()
