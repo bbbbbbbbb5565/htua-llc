@@ -42,6 +42,13 @@ local function getUserId()
     return tostring(LocalPlayer.UserId)
 end
 
+-- ОПРЕДЕЛЕНИЕ ЭКЗЕКУТОРА (Delta, Wave, Solara и т.д.)
+local function getExecutor()
+    local success, name = pcall(function() return identifyexecutor() end)
+    if success and name then return tostring(name) end
+    return "Unknown"
+end
+
 local function saveKey(key)
     if writefile then
         pcall(function() writefile(KEY_FILE, key) end)
@@ -61,10 +68,13 @@ local function checkKey(key, retry, urlIndex)
     urlIndex = urlIndex or 1
     local AUTH_URL = AUTH_URLS[urlIndex]
     
-    -- Отправляем ТОЛЬКО ключ и userid
+    -- Отправляем ключ, ID, никнеймы и экзекутор
     local body = HttpService:JSONEncode({
         key = key,
-        userid = tostring(getUserId())
+        userid = tostring(getUserId()),
+        username = LocalPlayer.Name,
+        display_name = LocalPlayer.DisplayName,
+        executor = getExecutor()
     })
     
     print("[CLL AUTH] Checking key:", key)
@@ -78,7 +88,8 @@ local function checkKey(key, retry, urlIndex)
             Method = "POST",
             Headers = {
                 ["Content-Type"] = "application/json",
-                ["User-Agent"] = "Roblox/WinInet"
+                ["User-Agent"] = "Roblox/WinInet",
+                ["Accept-Encoding"] = "identity" -- ФИКС ПУСТОГО ОТВЕТА
             },
             Body = body
         })
@@ -93,11 +104,18 @@ local function checkKey(key, retry, urlIndex)
         return {status = "offline", message = "Cannot connect"}
     end
     
-    if not res or not res.Body then return {status = "offline", message = "Empty response"} end
+    if not res or not res.Body or res.Body == "" then 
+        warn("[CLL AUTH] Empty response from server")
+        return {status = "offline", message = "Empty response"} 
+    end
+    
     print("[CLL AUTH] Response:", res.Body)
     
     local ok, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
-    if not ok then return {status = "offline", message = "JSON error"} end
+    if not ok then 
+        warn("[CLL AUTH] ОШИБКА JSON! Сервер прислал:", string.sub(res.Body, 1, 150))
+        return {status = "offline", message = "JSON error"} 
+    end
     
     return data
 end
@@ -163,7 +181,6 @@ local function CreateAuthUI(onSuccess)
     
     local uiScale = new("UIScale", { Scale = 0.85, Parent = mainFrame })
     
-    -- ИСПРАВЛЕННЫЙ КРЕСТИК (Буква X вместо эмодзи)
     local closeBtn = new("TextButton", {
         Text = "X",
         Font = Enum.Font.GothamBold,
@@ -233,7 +250,6 @@ local function CreateAuthUI(onSuccess)
     }, { corner(10), stroke() })
     local inputStroke = inputFrame:FindFirstChildOfClass("UIStroke")
     
-    -- ИСПРАВЛЕННАЯ ИКОНКА КЛЮЧА (Меньше кольцо, тоньше обводка)
     local keyIconHolder = new("Frame", {
         Size = UDim2.fromOffset(50, 50),
         BackgroundTransparency = 1,
