@@ -901,8 +901,8 @@ end)
 -- ESP loop
 task.spawn(function()
 	while not isUnloaded do
-		task.wait(0.1)
-		if os.clock() - last_esp_update >= (1/60) then
+		task.wait() -- Run every frame
+		if ESP_Config.Enabled and os.clock() - last_esp_update >= (1/120) then -- 120 FPS update rate
 			last_esp_update = os.clock()
 			updateESP()
 		end
@@ -967,6 +967,217 @@ oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
 	
 	return oldNamecall(self, ...)
 end)
+
+--// Config System Variables
+local HttpService = game:GetService("HttpService")
+local CONFIG_FOLDER = "CLL_Configs"
+
+local function SaveConfig(configName)
+	if not writefile or not makefolder then 
+		warn("[CLL] Config system not supported")
+		return false
+	end
+	
+	pcall(makefolder, CONFIG_FOLDER)
+	
+	local configData = {
+		-- SUK
+		SUK_Enabled = isMultiSuk,
+		SUK_Velocity = SUK_Config.velocity,
+		SUK_BulletCount = SUK_Config.bulletCount,
+		SUK_Interval = SUK_INTERVAL,
+		SUK_IgnoreFriends = SUK_IgnoreFriends,
+		SUK_TargetNPCs = SUK_TargetNPCs,
+		
+		-- Heal
+		HealEnabled = HealEnabled,
+		HealFlyHeight = HealFlyHeight,
+		
+		-- ESP
+		ESP_Enabled = ESP_Config.Enabled,
+		ESP_Box = ESP_Config.Box,
+		ESP_Name = ESP_Config.Name,
+		ESP_Health = ESP_Config.Health,
+		ESP_Distance = ESP_Config.Distance,
+		ESP_Chams = ESP_Config.Chams,
+		ESP_MaxDist = ESP_Config.MaxDist,
+		ESP_ChamsFillTrans = ESP_Config.ChamsFillTrans,
+		ESP_ChamsOutlineTrans = ESP_Config.ChamsOutlineTrans,
+		
+		-- Hitbox
+		Hitbox_Enabled = Hitbox_Config.Enabled,
+		Hitbox_IncludeNPCs = Hitbox_Config.IncludeNPCs,
+		Hitbox_Size = Hitbox_Config.Size,
+		Hitbox_Transparency = Hitbox_Config.Transparency,
+		
+		-- Combat
+		SilentAim_Enabled = SilentAimEnabled,
+		SilentAim_FOV = SilentAimFOV,
+		
+		-- Movement
+		WalkSpeed_Enabled = WalkSpeedEnabled,
+		WalkSpeed_Value = WalkSpeedValue,
+		JumpPower_Enabled = JumpPowerEnabled,
+		JumpPower_Value = JumpPowerValue,
+		InfiniteJump_Enabled = InfiniteJumpEnabled,
+		NoClip_Enabled = NoClipEnabled,
+		NoFall_Enabled = NoFallEnabled,
+		Fly_Enabled = FlyEnabled,
+		FlySpeed = FlySpeed,
+		Spin_Enabled = SpinEnabled,
+		SpinSpeed = SpinSpeed,
+		AntiSlow_Enabled = AntiSlowEnabled,
+		
+		-- Visual
+		TimeOverride_Enabled = TimeOverrideEnabled,
+		TimeOverride_Value = TimeOverrideValue,
+		CameraFOV_Locked = CameraFOVLocked,
+		CameraFOV_Value = CameraFOVValue,
+		MaxZoom_Value = MaxZoomValue,
+		RemoveFog_Enabled = RemoveFogEnabled,
+		
+		-- AntiLag
+		AntiLag_Enabled = AntiLagEnabled,
+		
+		-- Friends
+		FriendsList = FriendsList,
+	}
+	
+	local success, err = pcall(function()
+		writefile(CONFIG_FOLDER .. "/" .. configName .. ".json", HttpService:JSONEncode(configData))
+	end)
+	
+	if success then
+		print("[CLL] Config saved:", configName)
+		-- Update config list
+		if _G.CLL_UpdateConfigList then
+			local configs = {}
+			if isfolder and listfiles then
+				if isfolder(CONFIG_FOLDER) then
+					for _, file in ipairs(listfiles(CONFIG_FOLDER)) do
+						local name = file:match("([^/\\]+)%.json$")
+						if name then table.insert(configs, name) end
+					end
+				end
+			end
+			_G.CLL_UpdateConfigList(configs)
+		end
+		return true
+	else
+		warn("[CLL] Failed to save config:", err)
+		return false
+	end
+end
+
+local function LoadConfig(configName)
+	if not readfile or not isfile then 
+		warn("[CLL] Config system not supported")
+		return false
+	end
+	
+	local filePath = CONFIG_FOLDER .. "/" .. configName .. ".json"
+	if not isfile(filePath) then
+		warn("[CLL] Config not found:", configName)
+		return false
+	end
+	
+	local success, data = pcall(function()
+		return HttpService:JSONDecode(readfile(filePath))
+	end)
+	
+	if not success or type(data) ~= "table" then
+		warn("[CLL] Failed to load config:", configName)
+		return false
+	end
+	
+	-- Apply config data
+	if data.SUK_Velocity then SUK_Config.velocity = data.SUK_Velocity end
+	if data.SUK_BulletCount then SUK_Config.bulletCount = data.SUK_BulletCount end
+	if data.SUK_Interval then SUK_INTERVAL = data.SUK_Interval end
+	if data.SUK_IgnoreFriends ~= nil then SUK_IgnoreFriends = data.SUK_IgnoreFriends end
+	if data.SUK_TargetNPCs ~= nil then SUK_TargetNPCs = data.SUK_TargetNPCs end
+	
+	if data.HealFlyHeight then HealFlyHeight = data.HealFlyHeight end
+	
+	if data.ESP_MaxDist then ESP_Config.MaxDist = data.ESP_MaxDist end
+	if data.ESP_ChamsFillTrans then ESP_Config.ChamsFillTrans = data.ESP_ChamsFillTrans end
+	if data.ESP_ChamsOutlineTrans then ESP_Config.ChamsOutlineTrans = data.ESP_ChamsOutlineTrans end
+	
+	if data.Hitbox_Size then Hitbox_Config.Size = data.Hitbox_Size end
+	if data.Hitbox_Transparency then Hitbox_Config.Transparency = data.Hitbox_Transparency end
+	
+	if data.SilentAim_FOV then SilentAimFOV = data.SilentAim_FOV end
+	
+	if data.WalkSpeed_Value then WalkSpeedValue = data.WalkSpeed_Value end
+	if data.JumpPower_Value then JumpPowerValue = data.JumpPower_Value end
+	if data.FlySpeed then FlySpeed = data.FlySpeed end
+	if data.SpinSpeed then SpinSpeed = data.SpinSpeed end
+	
+	if data.TimeOverride_Value then TimeOverrideValue = data.TimeOverride_Value end
+	if data.CameraFOV_Value then CameraFOVValue = data.CameraFOV_Value end
+	if data.MaxZoom_Value then MaxZoomValue = data.MaxZoom_Value end
+	
+	-- Load friends list
+	if data.FriendsList then
+		FriendsList = {}
+		for userId, v in pairs(data.FriendsList) do
+			FriendsList[tonumber(userId) or userId] = v
+		end
+		
+		-- Update friends UI
+		local friendsList = {}
+		for userId, _ in pairs(FriendsList) do
+			local player = Players:GetPlayerByUserId(userId)
+			if player then
+				table.insert(friendsList, player.DisplayName or player.Name)
+			end
+		end
+		if _G.CLL_UpdateFriendsList then
+			_G.CLL_UpdateFriendsList(friendsList)
+		end
+	end
+	
+	print("[CLL] Config loaded:", configName)
+	return true
+end
+
+local function DeleteConfig(configName)
+	if not delfile or not isfile then 
+		warn("[CLL] Config system not supported")
+		return false
+	end
+	
+	local filePath = CONFIG_FOLDER .. "/" .. configName .. ".json"
+	if not isfile(filePath) then
+		warn("[CLL] Config not found:", configName)
+		return false
+	end
+	
+	local success = pcall(function()
+		delfile(filePath)
+	end)
+	
+	if success then
+		print("[CLL] Config deleted:", configName)
+		-- Update config list
+		if _G.CLL_UpdateConfigList then
+			local configs = {}
+			if isfolder and listfiles then
+				if isfolder(CONFIG_FOLDER) then
+					for _, file in ipairs(listfiles(CONFIG_FOLDER)) do
+						local name = file:match("([^/\\]+)%.json$")
+						if name then table.insert(configs, name) end
+					end
+				end
+			end
+			_G.CLL_UpdateConfigList(configs)
+		end
+		return true
+	else
+		warn("[CLL] Failed to delete config:", configName)
+		return false
+	end
+end
 
 --// РљРѕР»Р±СЌРєРё: СЃСЋРґР° РїРѕРґРєР»СЋС‡Р°Р№ СЃРІРѕСЋ Р»РѕРіРёРєСѓ
 local Callbacks = {
@@ -1190,6 +1401,12 @@ local Callbacks = {
 			end
 		elseif key == "move.antislow" then
 			AntiSlowEnabled = state
+		elseif key == "saveConfig" then
+			SaveConfig(state)
+		elseif key == "loadConfig" then
+			LoadConfig(state)
+		elseif key == "deleteConfig" then
+			DeleteConfig(state)
 		end
 	end,
 	OnSelectionChanged = function(selected)
@@ -2166,7 +2383,7 @@ divider(left, 546)
 local sukNpcSet, sukNpcGet = toggle(left, 571, "Auto Kill NPCs (Farms)", function(v) Callbacks.OnOption("targetNpcs", v) end, false)
 local sukFriendSet, sukFriendGet = toggle(left, 626, "Ignore Friends in SUK", function(v) Callbacks.OnOption("ignoreFriends", v) end, true)
 
---// РџСЂР°РІР°СЏ РїР°РЅРµР»СЊ SUK: РІРµСЂС…РЅСЏСЏ СЃС‚СЂРѕРєР°
+--// Правая панель SUK: верхняя строка
 local searchBox = new("Frame", { Size = UDim2.new(1, -292, 0, 43), Position = UDim2.fromOffset(8, 13), BackgroundColor3 = Theme.Row, Parent = right }, { corner(12), stroke(Color3.fromRGB(32, 32, 35)) })
 do
 	local icon = new("Frame", { Size = UDim2.fromOffset(30, 43), BackgroundTransparency = 1, Position = UDim2.fromOffset(10, 0), Parent = searchBox })
@@ -2228,6 +2445,27 @@ local function buildRow(plr, order)
 		Text = string.format("@%s  вЂў  %d HP  вЂў  %.1f m", plr.Name, hp, dist == math.huge and 0 or dist * 0.28),
 		TextSize = 12, TextColor3 = Theme.Dim, Size = UDim2.new(1, -140, 0, 18), Position = UDim2.fromOffset(66, 31), Parent = row,
 	})
+	
+	-- Add friend button (+)
+	local addBtn = new("TextButton", { 
+		Text = "+", 
+		Font = Enum.Font.GothamBold, 
+		TextSize = 18, 
+		TextColor3 = Color3.fromRGB(85, 255, 127), 
+		AutoButtonColor = false, 
+		Size = UDim2.fromOffset(24, 24), 
+		Position = UDim2.new(1, -60, 0.5, -12), 
+		BackgroundColor3 = Theme.Row, 
+		Parent = row 
+	}, { corner(6), stroke(Color3.fromRGB(85, 255, 127), 1.2) })
+	
+	addBtn.MouseButton1Click:Connect(function()
+		print("[CLL] Adding friend from SUK list:", plr.DisplayName)
+		Callbacks.OnOption("addFriend", plr)
+	end)
+	addBtn.MouseEnter:Connect(function() tween(addBtn, 0.15, { BackgroundColor3 = Color3.fromRGB(85, 255, 127, 0.2) }) end)
+	addBtn.MouseLeave:Connect(function() tween(addBtn, 0.15, { BackgroundColor3 = Theme.Row }) end)
+	
 	local box = new("TextButton", { Text = "", AutoButtonColor = false, Size = UDim2.fromOffset(20, 20), Position = UDim2.new(1, -33, 0.5, -10), BackgroundColor3 = Theme.Row, Parent = row }, { corner(5), stroke(Theme.Dim, 1.2) })
 	-- РіР°Р»РѕС‡РєР° РёР· РґРІСѓС… РїРѕРІС‘СЂРЅСѓС‚С‹С… РїРѕР»РѕСЃРѕРє
 	local mark = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Visible = false, Parent = box })
@@ -2359,6 +2597,22 @@ do
 	-- Expose update function
 	_G.CLL_UpdateConfigList = updateConfigList
 	
+	-- Load existing configs on startup
+	task.spawn(function()
+		wait(0.5) -- Wait for UI to fully load
+		if isfolder and listfiles then
+			local configs = {}
+			pcall(makefolder, CONFIG_FOLDER)
+			if isfolder(CONFIG_FOLDER) then
+				for _, file in ipairs(listfiles(CONFIG_FOLDER)) do
+					local name = file:match("([^/\\]+)%.json$")
+					if name then table.insert(configs, name) end
+				end
+			end
+			updateConfigList(configs)
+		end
+	end)
+	
 	-- Config buttons (moved down)
 	local function configBtn(text, y, callback)
 		local btn = new("TextButton", {
@@ -2473,6 +2727,21 @@ do
 	
 	-- Expose update function
 	_G.CLL_UpdateFriendsList = updateFriendsList
+	
+	-- Load existing friends on startup
+	task.spawn(function()
+		wait(0.5) -- Wait for UI to fully load
+		local friendsList = {}
+		for userId, _ in pairs(FriendsList) do
+			local player = Players:GetPlayerByUserId(userId)
+			if player then
+				table.insert(friendsList, player.DisplayName or player.Name)
+			end
+		end
+		if #friendsList > 0 then
+			updateFriendsList(friendsList)
+		end
+	end)
 end
 
 --// Страница Keybinds
