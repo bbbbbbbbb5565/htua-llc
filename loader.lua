@@ -13,9 +13,12 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
 -- ============== CONFIGURATION ==============
-local AUTH_URL = "https://cll-auth.onrender.com"
+local AUTH_URLS = {
+    "https://cll-auth.onrender.com", 
+}
 local MAIN_SCRIPT_URL = "https://raw.githubusercontent.com/bbbbbbbbb5565/htua-llc/refs/heads/main/main.lua"
 local KEY_FILE = "CLL_Key.txt"
+local CURRENT_AUTH_URL = 1
 -- ===========================================
 
 -- Theme matching CLL menu
@@ -38,10 +41,6 @@ _G.CLL_Auth = nil
 _G.CLL_Whitelist = {}
 
 -- Utility functions
-local function getHWID()
-    return (gethwid and gethwid()) or (get_hwid and get_hwid()) or "unknown"
-end
-
 local function getUserId()
     return tostring(LocalPlayer.UserId)
 end
@@ -67,35 +66,57 @@ local function loadKey()
 end
 
 -- Check key with API
-local function checkKey(key)
+local function checkKey(key, retry, urlIndex)
+    retry = retry or 0
+    urlIndex = urlIndex or 1
+    
+    local AUTH_URL = AUTH_URLS[urlIndex]
+    
+    -- Отправляем только key и userid, HWID удален
     local body = HttpService:JSONEncode({
         key = key,
-        userid = getUserId(),
-        hwid = getHWID()
+        userid = tostring(getUserId())
     })
     
     print("[CLL AUTH] Checking key:", key)
-    print("[CLL AUTH] UserID:", getUserId())
-    print("[CLL AUTH] HWID:", getHWID())
-    print("[CLL AUTH] API URL:", AUTH_URL .. "/check")
+    
+    local httpRequest = request or http_request or (syn and syn.request) or (http and http.request)
+    
+    if not httpRequest then
+        warn("[CLL AUTH] No HTTP request function available")
+        return {status = "offline", message = "Executor not supported"}
+    end
     
     local success, res = pcall(function()
-        return request({
+        return httpRequest({
             Url = AUTH_URL .. "/check",
             Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
+            Headers = {
+                ["Content-Type"] = "application/json",
+                ["User-Agent"] = "Roblox/WinInet"
+            },
             Body = body
         })
     end)
     
     if not success then
         warn("[CLL AUTH] Request failed:", res)
-        return {status = "offline"}
+        if urlIndex < #AUTH_URLS then
+            return checkKey(key, 0, urlIndex + 1)
+        end
+        if retry < 2 then
+            task.wait(2)
+            return checkKey(key, retry + 1, urlIndex)
+        end
+        return {status = "offline", message = "Cannot connect: " .. tostring(res)}
     end
     
     if not res or not res.Body then
-        warn("[CLL AUTH] No response body")
-        return {status = "offline"}
+        return {status = "offline", message = "Server not responding."}
+    end
+    
+    if res.StatusCode and res.StatusCode ~= 200 then
+        return {status = "offline", message = "Server error (HTTP " .. res.StatusCode .. ")"}
     end
     
     print("[CLL AUTH] Response:", res.Body)
@@ -105,11 +126,10 @@ local function checkKey(key)
     end)
     
     if not ok then
-        warn("[CLL AUTH] Failed to parse JSON:", data)
-        return {status = "offline"}
+        return {status = "offline", message = "Invalid server response"}
     end
     
-    print("[CLL AUTH] Parsed data:", HttpService:JSONEncode(data))
+    CURRENT_AUTH_URL = urlIndex
     return data
 end
 
@@ -130,24 +150,9 @@ local function applyAuth(data)
     end
 end
 
--- Ping bot status
-local function pingBot()
-    local res = request({
-        Url = AUTH_URL .. "/",
-        Method = "GET"
-    })
-    return res and res.StatusCode == 200
-end
-
--- Check if player is whitelisted
-local function IsWhitelisted(player)
-    return player and _G.CLL_Whitelist and _G.CLL_Whitelist[player.UserId] == true
-end
-
 -- ============== UI CREATION ==============
 
 local function CreateAuthUI(onSuccess)
-    -- Remove existing UI
     if game:GetService("CoreGui"):FindFirstChild("CLL_AuthUI") then
         game:GetService("CoreGui"):FindFirstChild("CLL_AuthUI"):Destroy()
     end
@@ -159,12 +164,10 @@ local function CreateAuthUI(onSuccess)
     screenGui.IgnoreGuiInset = true
     screenGui.Parent = game:GetService("CoreGui")
     
-    -- Blur background
     local blur = Instance.new("BlurEffect")
     blur.Size = 18
     blur.Parent = game:GetService("Lighting")
     
-    -- Dark overlay
     local overlay = Instance.new("Frame")
     overlay.Size = UDim2.fromScale(1, 1)
     overlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
@@ -173,7 +176,6 @@ local function CreateAuthUI(onSuccess)
     overlay.ZIndex = 1
     overlay.Parent = screenGui
     
-    -- Helper functions
     local function new(class, props, children)
         local o = Instance.new(class)
         for k, v in pairs(props or {}) do o[k] = v end
@@ -183,7 +185,6 @@ local function CreateAuthUI(onSuccess)
     local function corner(r) return new("UICorner", { CornerRadius = UDim.new(0, r) }) end
     local function stroke(c, t) return new("UIStroke", { Color = c or Theme.Stroke, Thickness = t or 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }) end
     
-    -- Main frame (CanvasGroup for smooth animations)
     local mainFrame = new("CanvasGroup", {
         Size = UDim2.fromOffset(460, 380),
         AnchorPoint = Vector2.new(0.5, 0.5),
@@ -198,7 +199,6 @@ local function CreateAuthUI(onSuccess)
     
     local uiScale = new("UIScale", { Scale = 0.85, Parent = mainFrame })
     
-    -- Close Button (X)
     local closeBtn = new("TextButton", {
         Text = "✕",
         Font = Enum.Font.GothamBold,
@@ -221,7 +221,6 @@ local function CreateAuthUI(onSuccess)
         blur:Destroy()
     end)
 
-    -- Logo
     local logo = new("TextLabel", {
         Text = "CLL",
         Font = Enum.Font.Michroma,
@@ -234,7 +233,6 @@ local function CreateAuthUI(onSuccess)
         Parent = mainFrame
     })
     
-    -- Subtitle
     local subtitle = new("TextLabel", {
         Text = "Authentication",
         Font = Enum.Font.Gotham,
@@ -247,7 +245,6 @@ local function CreateAuthUI(onSuccess)
         Parent = mainFrame
     })
     
-    -- Key label
     local keyLabel = new("TextLabel", {
         Text = "License Key",
         Font = Enum.Font.GothamMedium,
@@ -261,7 +258,6 @@ local function CreateAuthUI(onSuccess)
         Parent = mainFrame
     })
     
-    -- Key input frame
     local inputFrame = new("Frame", {
         Size = UDim2.fromOffset(400, 50),
         Position = UDim2.fromOffset(30, 155),
@@ -272,7 +268,6 @@ local function CreateAuthUI(onSuccess)
     }, { corner(10), stroke() })
     local inputStroke = inputFrame:FindFirstChildOfClass("UIStroke")
     
-    -- Drawn Key Icon
     local keyIconHolder = new("Frame", {
         Size = UDim2.fromOffset(50, 50),
         BackgroundTransparency = 1,
@@ -284,7 +279,6 @@ local function CreateAuthUI(onSuccess)
     new("Frame", { Size = UDim2.fromOffset(2, 4), Position = UDim2.fromOffset(34, 22), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, ZIndex = 3, Parent = keyIconHolder })
     new("Frame", { Size = UDim2.fromOffset(2, 3), Position = UDim2.fromOffset(31, 22), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, ZIndex = 3, Parent = keyIconHolder })
     
-    -- Key input
     local keyInput = new("TextBox", {
         Size = UDim2.new(1, -60, 1, 0),
         Position = UDim2.fromOffset(60, 0),
@@ -301,7 +295,6 @@ local function CreateAuthUI(onSuccess)
         Parent = inputFrame
     })
     
-    -- Status label
     local statusLabel = new("TextLabel", {
         Text = "",
         Font = Enum.Font.Gotham,
@@ -316,7 +309,6 @@ local function CreateAuthUI(onSuccess)
         Parent = mainFrame
     })
     
-    -- Verify button
     local verifyButton = new("TextButton", {
         Size = UDim2.fromOffset(400, 50),
         Position = UDim2.fromOffset(30, 250),
@@ -331,7 +323,6 @@ local function CreateAuthUI(onSuccess)
         Parent = mainFrame
     }, { corner(10) })
     
-    -- Footer text
     local footerText = new("TextLabel", {
         Text = "Need a key? Contact the script developers",
         Font = Enum.Font.Gotham,
@@ -344,11 +335,9 @@ local function CreateAuthUI(onSuccess)
         Parent = mainFrame
     })
     
-    -- Entrance animation
     TweenService:Create(uiScale, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
     TweenService:Create(mainFrame, TweenInfo.new(0.4), { GroupTransparency = 0 }):Play()
     
-    -- Button hover
     verifyButton.MouseEnter:Connect(function()
         TweenService:Create(verifyButton, TweenInfo.new(0.2), { BackgroundColor3 = Color3.fromRGB(112, 146, 255) }):Play()
     end)
@@ -356,7 +345,6 @@ local function CreateAuthUI(onSuccess)
         TweenService:Create(verifyButton, TweenInfo.new(0.2), { BackgroundColor3 = Theme.Accent }):Play()
     end)
     
-    -- Input focus effect
     keyInput.Focused:Connect(function()
         if inputStroke then
             TweenService:Create(inputStroke, TweenInfo.new(0.2), { Color = Theme.Accent, Thickness = 2 }):Play()
@@ -369,7 +357,6 @@ local function CreateAuthUI(onSuccess)
         end
     end)
     
-    -- Verify function
     local function VerifyKey()
         local key = keyInput.Text:gsub("%s+", "")
         
@@ -390,6 +377,11 @@ local function CreateAuthUI(onSuccess)
         statusLabel.Visible = true
         
         task.spawn(function()
+            wait(1)
+            if verifyButton.Text == "Verifying..." then
+                statusLabel.Text = "🔄 Waking up server (first time may take 30s)..."
+            end
+            
             local data = checkKey(key)
             
             if data.status == "valid" then
@@ -416,13 +408,18 @@ local function CreateAuthUI(onSuccess)
                     invalid = "Invalid key",
                     banned = "Key is banned",
                     expired = "Key expired",
-                    hwid_mismatch = "Key bound to another device",
                     userid_mismatch = "Key bound to another account",
-                    offline = "Cannot connect to server"
+                    offline = data.message or "Cannot connect to server"
                 }
                 
-                statusLabel.Text = "❌ " .. (messages[data.status] or data.status)
+                local errorMsg = messages[data.status] or data.status or "Unknown error"
+                statusLabel.Text = "❌ " .. errorMsg
                 statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+                
+                print("[CLL AUTH] Error:", errorMsg)
+                if data.message then
+                    print("[CLL AUTH] Details:", data.message)
+                end
                 
                 verifyButton.Text = "Verify Key"
                 verifyButton.BackgroundColor3 = Theme.Accent
@@ -453,18 +450,6 @@ local function CreateAuthUI(onSuccess)
     keyInput:CaptureFocus()
 end
 
--- Create profile UI (optional)
-local function CreateProfileUI()
-    if not _G.CLL_Auth then return end
-    
-    print("[CLL] Profile loaded:")
-    print("  Role:", _G.CLL_Auth.role)
-    print("  Type:", _G.CLL_Auth.type)
-    print("  Expires:", _G.CLL_Auth.expires_at or "Never")
-    print("  Whitelist:", #_G.CLL_Whitelist or 0, "users")
-end
-
--- Load main script
 local function LoadMainScript()
     print("[CLL] Loading main script...")
     
@@ -484,7 +469,6 @@ end
 
 -- ============== MAIN EXECUTION ==============
 
--- Show loading splash
 local function ShowLoadingSplash()
     local splashGui = Instance.new("ScreenGui")
     splashGui.Name = "CLL_LoadingSplash"
@@ -573,7 +557,6 @@ if savedKey then
         print("[CLL] ✅ Saved key valid!")
         applyAuth(data)
         HideLoadingSplash(splash)
-        CreateProfileUI()
         LoadMainScript()
         return
     else
@@ -588,6 +571,5 @@ HideLoadingSplash(splash)
 
 print("[CLL] No valid key, showing auth UI...")
 CreateAuthUI(function()
-    CreateProfileUI()
     LoadMainScript()
 end)
