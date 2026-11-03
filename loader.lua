@@ -192,9 +192,9 @@ local function CreateAuthUI(onSuccess)
         }) 
     end
     
-    -- Main frame (CLL style) - BIGGER SIZE
+    -- Main frame (CLL style) - FIXED SIZE, NO AUTO-SCALE ISSUES
     local mainFrame = new("Frame", {
-        Size = UDim2.fromOffset(520, 360),
+        Size = UDim2.fromOffset(550, 380),
         Position = UDim2.fromScale(0.5, 0.5),
         AnchorPoint = Vector2.new(0.5, 0.5),
         BackgroundColor3 = Theme.Bg,
@@ -202,35 +202,24 @@ local function CreateAuthUI(onSuccess)
         Parent = screenGui
     }, { corner(20), stroke() })
     
-    -- Auto-scale for different screen sizes
-    local uiScale = Instance.new("UIScale")
-    uiScale.Parent = mainFrame
-    
-    local function fitScreen()
-        local viewport = workspace.CurrentCamera.ViewportSize
-        local scale = math.min(viewport.X / 600, viewport.Y / 450, 1.2)
-        uiScale.Scale = math.max(scale, 0.7)
-    end
-    
-    fitScreen()
-    workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fitScreen)
-    
-    -- Header (bigger)
+    -- Header (proper size)
     local header = new("Frame", {
-        Size = UDim2.new(1, 0, 0, 85),
+        Size = UDim2.new(1, 0, 0, 90),
         BackgroundTransparency = 1,
         Parent = mainFrame
     })
     
-    -- Logo (bigger)
+    -- Logo (proper size)
     local logo = new("TextLabel", {
         Text = "CLL",
         Font = Enum.Font.Michroma,
-        TextSize = 42,
+        TextSize = 48,
         TextColor3 = Theme.Text,
         BackgroundTransparency = 1,
-        Size = UDim2.fromOffset(150, 85),
-        Position = UDim2.fromOffset(30, 0),
+        Size = UDim2.fromOffset(200, 90),
+        Position = UDim2.fromOffset(35, 0),
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Center,
         Parent = header
     })
     
@@ -238,97 +227,101 @@ local function CreateAuthUI(onSuccess)
     local subtitle = new("TextLabel", {
         Text = "Authentication",
         Font = Enum.Font.Gotham,
-        TextSize = 15,
+        TextSize = 16,
         TextColor3 = Theme.Dim,
         BackgroundTransparency = 1,
-        Size = UDim2.new(1, -30, 0, 25),
-        Position = UDim2.fromOffset(30, 105),
+        Size = UDim2.new(1, -35, 0, 25),
+        Position = UDim2.fromOffset(35, 110),
         TextXAlignment = Enum.TextXAlignment.Left,
         Parent = mainFrame
     })
     
-    -- Content panel (bigger)
+    -- Content panel (proper size)
     local contentPanel = new("Frame", {
-        Size = UDim2.new(1, -60, 0, 160),
-        Position = UDim2.fromOffset(30, 145),
+        Size = UDim2.new(1, -70, 0, 170),
+        Position = UDim2.fromOffset(35, 155),
         BackgroundColor3 = Theme.Panel,
         BorderSizePixel = 0,
         Parent = mainFrame
     }, { corner(12), stroke() })
     
-    -- Key label (bigger)
+    -- Key label (proper size)
     local keyLabel = new("TextLabel", {
         Text = "License Key",
         Font = Enum.Font.GothamMedium,
-        TextSize = 14,
+        TextSize = 15,
         TextColor3 = Theme.Dim,
         BackgroundTransparency = 1,
-        Size = UDim2.new(1, -30, 0, 25),
+        Size = UDim2.new(1, -30, 0, 30),
         Position = UDim2.fromOffset(15, 15),
         TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Center,
         Parent = contentPanel
     })
     
-    -- Key input frame (bigger)
+    -- Key input frame (proper size)
     local inputFrame = new("Frame", {
-        Size = UDim2.new(1, -30, 0, 55),
-        Position = UDim2.fromOffset(15, 45),
+        Size = UDim2.new(1, -30, 0, 60),
+        Position = UDim2.fromOffset(15, 50),
         BackgroundColor3 = Theme.Row,
         BorderSizePixel = 0,
         Parent = contentPanel
     }, { corner(10), stroke() })
     
-    -- Key icon (bigger)
+    -- Key icon (proper size)
     local keyIcon = new("TextLabel", {
         Text = "🔑",
         Font = Enum.Font.Gotham,
-        TextSize = 22,
+        TextSize = 24,
         TextColor3 = Theme.Dim,
         BackgroundTransparency = 1,
-        Size = UDim2.fromOffset(45, 55),
+        Size = UDim2.fromOffset(50, 60),
         Position = UDim2.fromOffset(5, 0),
+        TextYAlignment = Enum.TextYAlignment.Center,
         Parent = inputFrame
     })
     
-    -- Key input (bigger)
+    -- Key input (proper size)
     local keyInput = new("TextBox", {
-        Size = UDim2.new(1, -55, 1, 0),
-        Position = UDim2.fromOffset(50, 0),
+        Size = UDim2.new(1, -60, 1, 0),
+        Position = UDim2.fromOffset(55, 0),
         BackgroundTransparency = 1,
         Text = "",
         PlaceholderText = "XXXX-XXXX-XXXX",
         PlaceholderColor3 = Theme.Dim,
         Font = Enum.Font.GothamMedium,
-        TextSize = 18,
+        TextSize = 20,
         TextColor3 = Theme.Text,
         TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Center,
         ClearTextOnFocus = false,
         Parent = inputFrame
     })
     
-    -- Status label (bigger)
+    -- Status label (proper size)
     local statusLabel = new("TextLabel", {
         Text = "",
         Font = Enum.Font.Gotham,
-        TextSize = 13,
+        TextSize = 14,
         TextColor3 = Color3.fromRGB(255, 100, 100),
         BackgroundTransparency = 1,
-        Size = UDim2.new(1, -30, 0, 25),
-        Position = UDim2.fromOffset(15, 110),
+        Size = UDim2.new(1, -30, 0, 30),
+        Position = UDim2.fromOffset(15, 120),
         TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Center,
         Visible = false,
         Parent = contentPanel
     })
     
-    -- Verify button (bigger)
+    -- Verify button (proper size)
     local verifyButton = new("TextButton", {
-        Size = UDim2.new(1, -60, 0, 55),
-        Position = UDim2.fromOffset(30, 318),
+        Size = UDim2.new(1, -70, 0, 60),
+        Position = UDim2.fromOffset(35, 340),
         BackgroundColor3 = Theme.Accent,
         BorderSizePixel = 0,
         Text = "Verify Key",
         Font = Enum.Font.GothamBold,
-        TextSize = 18,
+        TextSize = 20,
         TextColor3 = Color3.fromRGB(255, 255, 255),
         AutoButtonColor = false,
         Parent = mainFrame
@@ -338,11 +331,11 @@ local function CreateAuthUI(onSuccess)
     local footerText = new("TextLabel", {
         Text = "Need a key? Contact admin in Discord",
         Font = Enum.Font.Gotham,
-        TextSize = 12,
+        TextSize = 13,
         TextColor3 = Theme.Dim,
         BackgroundTransparency = 1,
         Size = UDim2.new(1, 0, 0, 20),
-        Position = UDim2.fromOffset(0, 335),
+        Position = UDim2.fromOffset(0, 357),
         Parent = mainFrame
     })
     
@@ -352,7 +345,7 @@ local function CreateAuthUI(onSuccess)
     
     local enterTween = TweenService:Create(mainFrame, 
         TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), 
-        { Size = UDim2.fromOffset(520, 360), GroupTransparency = 0 }
+        { Size = UDim2.fromOffset(550, 380), GroupTransparency = 0 }
     )
     enterTween:Play()
     
