@@ -170,6 +170,7 @@ local function CreateAuthUI(onSuccess)
     overlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
     overlay.BackgroundTransparency = 0.3
     overlay.BorderSizePixel = 0
+    overlay.ZIndex = 1
     overlay.Parent = screenGui
     
     -- Helper functions
@@ -182,28 +183,44 @@ local function CreateAuthUI(onSuccess)
     local function corner(r) return new("UICorner", { CornerRadius = UDim.new(0, r) }) end
     local function stroke(c, t) return new("UIStroke", { Color = c or Theme.Stroke, Thickness = t or 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }) end
     
-    -- Container frame
-    local container = new("Frame", {
-        Size = UDim2.fromScale(1, 1),
-        BackgroundTransparency = 1,
-        Parent = screenGui
-    })
-    
-    -- Main frame (Properly centered via AnchorPoint)
-    local mainFrame = new("Frame", {
+    -- Main frame (CanvasGroup for smooth animations)
+    local mainFrame = new("CanvasGroup", {
         Size = UDim2.fromOffset(460, 380),
         AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.fromScale(0.5, 0.5),
         BackgroundColor3 = Theme.Bg,
         BorderSizePixel = 0,
         ClipsDescendants = false,
-        Parent = container
+        ZIndex = 2,
+        GroupTransparency = 1,
+        Parent = screenGui
     }, { corner(20), stroke() })
     
-    -- Scale for smooth animations
     local uiScale = new("UIScale", { Scale = 0.85, Parent = mainFrame })
-    mainFrame.GroupTransparency = 1
     
+    -- Close Button (X)
+    local closeBtn = new("TextButton", {
+        Text = "✕",
+        Font = Enum.Font.GothamBold,
+        TextSize = 18,
+        TextColor3 = Theme.Dim,
+        BackgroundTransparency = 1,
+        Size = UDim2.fromOffset(30, 30),
+        Position = UDim2.new(1, -40, 0, 10),
+        ZIndex = 3,
+        Parent = mainFrame
+    })
+    closeBtn.MouseEnter:Connect(function() TweenService:Create(closeBtn, TweenInfo.new(0.1), {TextColor3 = Color3.fromRGB(255, 100, 100)}):Play() end)
+    closeBtn.MouseLeave:Connect(function() TweenService:Create(closeBtn, TweenInfo.new(0.1), {TextColor3 = Theme.Dim}):Play() end)
+    closeBtn.MouseButton1Click:Connect(function()
+        TweenService:Create(mainFrame, TweenInfo.new(0.2), {GroupTransparency = 1}):Play()
+        TweenService:Create(overlay, TweenInfo.new(0.2), {BackgroundTransparency = 1}):Play()
+        TweenService:Create(blur, TweenInfo.new(0.2), {Size = 0}):Play()
+        task.wait(0.25)
+        screenGui:Destroy()
+        blur:Destroy()
+    end)
+
     -- Logo
     local logo = new("TextLabel", {
         Text = "CLL",
@@ -213,6 +230,7 @@ local function CreateAuthUI(onSuccess)
         BackgroundTransparency = 1,
         Size = UDim2.new(1, 0, 0, 60),
         Position = UDim2.fromOffset(0, 30),
+        ZIndex = 3,
         Parent = mainFrame
     })
     
@@ -225,6 +243,7 @@ local function CreateAuthUI(onSuccess)
         BackgroundTransparency = 1,
         Size = UDim2.new(1, 0, 0, 20),
         Position = UDim2.fromOffset(0, 85),
+        ZIndex = 3,
         Parent = mainFrame
     })
     
@@ -238,6 +257,7 @@ local function CreateAuthUI(onSuccess)
         Size = UDim2.fromOffset(400, 20),
         Position = UDim2.fromOffset(30, 130),
         TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 3,
         Parent = mainFrame
     })
     
@@ -247,23 +267,22 @@ local function CreateAuthUI(onSuccess)
         Position = UDim2.fromOffset(30, 155),
         BackgroundColor3 = Theme.Row,
         BorderSizePixel = 0,
+        ZIndex = 3,
         Parent = mainFrame
     }, { corner(10), stroke() })
     local inputStroke = inputFrame:FindFirstChildOfClass("UIStroke")
     
-    -- Drawn Key Icon (Replaces Emoji)
+    -- Drawn Key Icon
     local keyIconHolder = new("Frame", {
         Size = UDim2.fromOffset(50, 50),
         BackgroundTransparency = 1,
+        ZIndex = 3,
         Parent = inputFrame
     })
-    -- Ring
-    new("Frame", { Size = UDim2.fromOffset(14, 14), Position = UDim2.fromOffset(18, 16), BackgroundTransparency = 1, Parent = keyIconHolder }, { new("UICorner", { CornerRadius = UDim.new(1, 0) }), stroke(Theme.Dim, 2) })
-    -- Shaft
-    new("Frame", { Size = UDim2.fromOffset(10, 2), Position = UDim2.fromOffset(28, 22), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, Parent = keyIconHolder })
-    -- Teeth
-    new("Frame", { Size = UDim2.fromOffset(2, 4), Position = UDim2.fromOffset(34, 22), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, Parent = keyIconHolder })
-    new("Frame", { Size = UDim2.fromOffset(2, 3), Position = UDim2.fromOffset(31, 22), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, Parent = keyIconHolder })
+    new("Frame", { Size = UDim2.fromOffset(14, 14), Position = UDim2.fromOffset(18, 16), BackgroundTransparency = 1, ZIndex = 3, Parent = keyIconHolder }, { new("UICorner", { CornerRadius = UDim.new(1, 0) }), stroke(Theme.Dim, 2) })
+    new("Frame", { Size = UDim2.fromOffset(10, 2), Position = UDim2.fromOffset(28, 22), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, ZIndex = 3, Parent = keyIconHolder })
+    new("Frame", { Size = UDim2.fromOffset(2, 4), Position = UDim2.fromOffset(34, 22), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, ZIndex = 3, Parent = keyIconHolder })
+    new("Frame", { Size = UDim2.fromOffset(2, 3), Position = UDim2.fromOffset(31, 22), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, ZIndex = 3, Parent = keyIconHolder })
     
     -- Key input
     local keyInput = new("TextBox", {
@@ -278,6 +297,7 @@ local function CreateAuthUI(onSuccess)
         TextColor3 = Theme.Text,
         TextXAlignment = Enum.TextXAlignment.Left,
         ClearTextOnFocus = false,
+        ZIndex = 3,
         Parent = inputFrame
     })
     
@@ -292,6 +312,7 @@ local function CreateAuthUI(onSuccess)
         Position = UDim2.fromOffset(30, 215),
         TextXAlignment = Enum.TextXAlignment.Left,
         Visible = false,
+        ZIndex = 3,
         Parent = mainFrame
     })
     
@@ -306,6 +327,7 @@ local function CreateAuthUI(onSuccess)
         TextSize = 18,
         TextColor3 = Color3.fromRGB(255, 255, 255),
         AutoButtonColor = false,
+        ZIndex = 3,
         Parent = mainFrame
     }, { corner(10) })
     
@@ -318,10 +340,11 @@ local function CreateAuthUI(onSuccess)
         BackgroundTransparency = 1,
         Size = UDim2.new(1, 0, 0, 20),
         Position = UDim2.fromOffset(0, 340),
+        ZIndex = 3,
         Parent = mainFrame
     })
     
-    -- Entrance animation (Scale and Fade)
+    -- Entrance animation
     TweenService:Create(uiScale, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
     TweenService:Create(mainFrame, TweenInfo.new(0.4), { GroupTransparency = 0 }):Play()
     
@@ -346,7 +369,7 @@ local function CreateAuthUI(onSuccess)
         end
     end)
     
-    -- Verify function (Original Logic Kept)
+    -- Verify function
     local function VerifyKey()
         local key = keyInput.Text:gsub("%s+", "")
         
@@ -378,7 +401,6 @@ local function CreateAuthUI(onSuccess)
                 
                 wait(0.5)
                 
-                -- Exit animation
                 TweenService:Create(uiScale, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In), { Scale = 0.85 }):Play()
                 TweenService:Create(mainFrame, TweenInfo.new(0.3), { GroupTransparency = 1 }):Play()
                 TweenService:Create(overlay, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
@@ -407,7 +429,6 @@ local function CreateAuthUI(onSuccess)
                 verifyButton.Active = true
                 keyInput.Active = true
                 
-                -- Correct Shake Animation using AnchorPoint
                 local originalPos = UDim2.fromScale(0.5, 0.5)
                 for i = 1, 3 do
                     TweenService:Create(mainFrame, TweenInfo.new(0.05), { Position = UDim2.new(0.5, 12, 0.5, 0) }):Play()
@@ -436,7 +457,6 @@ end
 local function CreateProfileUI()
     if not _G.CLL_Auth then return end
     
-    -- TODO: Implement profile UI
     print("[CLL] Profile loaded:")
     print("  Role:", _G.CLL_Auth.role)
     print("  Type:", _G.CLL_Auth.type)
@@ -473,14 +493,12 @@ local function ShowLoadingSplash()
     splashGui.IgnoreGuiInset = true
     splashGui.Parent = game:GetService("CoreGui")
     
-    -- Background
     local bg = Instance.new("Frame")
     bg.Size = UDim2.fromScale(1, 1)
     bg.BackgroundColor3 = Color3.fromRGB(13, 13, 14)
     bg.BorderSizePixel = 0
     bg.Parent = splashGui
     
-    -- Logo
     local logo = Instance.new("TextLabel")
     logo.Size = UDim2.fromOffset(200, 80)
     logo.Position = UDim2.fromScale(0.5, 0.45)
@@ -492,7 +510,6 @@ local function ShowLoadingSplash()
     logo.TextColor3 = Color3.fromRGB(240, 240, 242)
     logo.Parent = bg
     
-    -- Loading text
     local loadingText = Instance.new("TextLabel")
     loadingText.Size = UDim2.fromOffset(300, 30)
     loadingText.Position = UDim2.fromScale(0.5, 0.55)
@@ -504,7 +521,6 @@ local function ShowLoadingSplash()
     loadingText.TextColor3 = Color3.fromRGB(125, 125, 132)
     loadingText.Parent = bg
     
-    -- Animated dots
     task.spawn(function()
         local dots = {".", "..", "..."}
         local i = 1
@@ -515,7 +531,6 @@ local function ShowLoadingSplash()
         end
     end)
     
-    -- Fade in
     bg.BackgroundTransparency = 1
     logo.TextTransparency = 1
     loadingText.TextTransparency = 1
@@ -546,13 +561,9 @@ end
 
 print("[CLL] Starting authentication...")
 
--- Show loading splash
 local splash = ShowLoadingSplash()
-
--- Wait a bit for splash to show
 wait(0.5)
 
--- Try local key first
 local savedKey = loadKey()
 if savedKey then
     print("[CLL] Found saved key, verifying...")
@@ -573,7 +584,6 @@ if savedKey then
     end
 end
 
--- Hide splash and show auth UI
 HideLoadingSplash(splash)
 
 print("[CLL] No valid key, showing auth UI...")
