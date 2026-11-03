@@ -179,50 +179,39 @@ local function CreateAuthUI(onSuccess)
         for _, c in ipairs(children or {}) do c.Parent = o end
         return o
     end
+    local function corner(r) return new("UICorner", { CornerRadius = UDim.new(0, r) }) end
+    local function stroke(c, t) return new("UIStroke", { Color = c or Theme.Stroke, Thickness = t or 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }) end
     
-    local function corner(r) 
-        return new("UICorner", { CornerRadius = UDim.new(0, r) }) 
-    end
-    
-    local function stroke(c, t) 
-        return new("UIStroke", { 
-            Color = c or Theme.Stroke, 
-            Thickness = t or 1, 
-            ApplyStrokeMode = Enum.ApplyStrokeMode.Border 
-        }) 
-    end
-    
-    -- Container frame for proper centering
+    -- Container frame
     local container = new("Frame", {
         Size = UDim2.fromScale(1, 1),
         BackgroundTransparency = 1,
         Parent = screenGui
     })
     
-    -- Main frame - FIXED SIZE, ABSOLUTE POSITIONING
+    -- Main frame (Properly centered via AnchorPoint)
     local mainFrame = new("Frame", {
-        Size = UDim2.fromOffset(500, 400),
-        Position = UDim2.new(0.5, -250, 0.5, -200), -- Center manually
+        Size = UDim2.fromOffset(460, 380),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
         BackgroundColor3 = Theme.Bg,
         BorderSizePixel = 0,
         ClipsDescendants = false,
         Parent = container
     }, { corner(20), stroke() })
     
-    -- Size constraint to prevent compression
-    local sizeConstraint = Instance.new("UISizeConstraint")
-    sizeConstraint.MinSize = Vector2.new(500, 400)
-    sizeConstraint.MaxSize = Vector2.new(500, 400)
-    sizeConstraint.Parent = mainFrame
+    -- Scale for smooth animations
+    local uiScale = new("UIScale", { Scale = 0.85, Parent = mainFrame })
+    mainFrame.GroupTransparency = 1
     
     -- Logo
     local logo = new("TextLabel", {
         Text = "CLL",
         Font = Enum.Font.Michroma,
-        TextSize = 56,
+        TextSize = 48,
         TextColor3 = Theme.Text,
         BackgroundTransparency = 1,
-        Size = UDim2.fromOffset(500, 80),
+        Size = UDim2.new(1, 0, 0, 60),
         Position = UDim2.fromOffset(0, 30),
         Parent = mainFrame
     })
@@ -231,11 +220,11 @@ local function CreateAuthUI(onSuccess)
     local subtitle = new("TextLabel", {
         Text = "Authentication",
         Font = Enum.Font.Gotham,
-        TextSize = 18,
+        TextSize = 16,
         TextColor3 = Theme.Dim,
         BackgroundTransparency = 1,
-        Size = UDim2.fromOffset(500, 30),
-        Position = UDim2.fromOffset(0, 100),
+        Size = UDim2.new(1, 0, 0, 20),
+        Position = UDim2.fromOffset(0, 85),
         Parent = mainFrame
     })
     
@@ -243,46 +232,49 @@ local function CreateAuthUI(onSuccess)
     local keyLabel = new("TextLabel", {
         Text = "License Key",
         Font = Enum.Font.GothamMedium,
-        TextSize = 16,
+        TextSize = 14,
         TextColor3 = Theme.Dim,
         BackgroundTransparency = 1,
-        Size = UDim2.fromOffset(440, 25),
-        Position = UDim2.fromOffset(30, 155),
+        Size = UDim2.fromOffset(400, 20),
+        Position = UDim2.fromOffset(30, 130),
         TextXAlignment = Enum.TextXAlignment.Left,
         Parent = mainFrame
     })
     
     -- Key input frame
     local inputFrame = new("Frame", {
-        Size = UDim2.fromOffset(440, 65),
-        Position = UDim2.fromOffset(30, 185),
+        Size = UDim2.fromOffset(400, 50),
+        Position = UDim2.fromOffset(30, 155),
         BackgroundColor3 = Theme.Row,
         BorderSizePixel = 0,
         Parent = mainFrame
-    }, { corner(12), stroke() })
+    }, { corner(10), stroke() })
+    local inputStroke = inputFrame:FindFirstChildOfClass("UIStroke")
     
-    -- Key icon
-    local keyIcon = new("TextLabel", {
-        Text = "🔑",
-        Font = Enum.Font.Gotham,
-        TextSize = 28,
-        TextColor3 = Theme.Dim,
+    -- Drawn Key Icon (Replaces Emoji)
+    local keyIconHolder = new("Frame", {
+        Size = UDim2.fromOffset(50, 50),
         BackgroundTransparency = 1,
-        Size = UDim2.fromOffset(60, 65),
-        Position = UDim2.fromOffset(0, 0),
         Parent = inputFrame
     })
+    -- Ring
+    new("Frame", { Size = UDim2.fromOffset(14, 14), Position = UDim2.fromOffset(18, 16), BackgroundTransparency = 1, Parent = keyIconHolder }, { new("UICorner", { CornerRadius = UDim.new(1, 0) }), stroke(Theme.Dim, 2) })
+    -- Shaft
+    new("Frame", { Size = UDim2.fromOffset(10, 2), Position = UDim2.fromOffset(28, 22), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, Parent = keyIconHolder })
+    -- Teeth
+    new("Frame", { Size = UDim2.fromOffset(2, 4), Position = UDim2.fromOffset(34, 22), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, Parent = keyIconHolder })
+    new("Frame", { Size = UDim2.fromOffset(2, 3), Position = UDim2.fromOffset(31, 22), BackgroundColor3 = Theme.Dim, BorderSizePixel = 0, Parent = keyIconHolder })
     
     -- Key input
     local keyInput = new("TextBox", {
-        Size = UDim2.fromOffset(370, 65),
+        Size = UDim2.new(1, -60, 1, 0),
         Position = UDim2.fromOffset(60, 0),
         BackgroundTransparency = 1,
         Text = "",
         PlaceholderText = "XXXX-XXXX-XXXX",
         PlaceholderColor3 = Theme.Dim,
         Font = Enum.Font.GothamMedium,
-        TextSize = 22,
+        TextSize = 18,
         TextColor3 = Theme.Text,
         TextXAlignment = Enum.TextXAlignment.Left,
         ClearTextOnFocus = false,
@@ -293,11 +285,11 @@ local function CreateAuthUI(onSuccess)
     local statusLabel = new("TextLabel", {
         Text = "",
         Font = Enum.Font.Gotham,
-        TextSize = 15,
+        TextSize = 14,
         TextColor3 = Color3.fromRGB(255, 100, 100),
         BackgroundTransparency = 1,
-        Size = UDim2.fromOffset(440, 25),
-        Position = UDim2.fromOffset(30, 260),
+        Size = UDim2.fromOffset(400, 20),
+        Position = UDim2.fromOffset(30, 215),
         TextXAlignment = Enum.TextXAlignment.Left,
         Visible = false,
         Parent = mainFrame
@@ -305,78 +297,56 @@ local function CreateAuthUI(onSuccess)
     
     -- Verify button
     local verifyButton = new("TextButton", {
-        Size = UDim2.fromOffset(440, 65),
-        Position = UDim2.fromOffset(30, 295),
+        Size = UDim2.fromOffset(400, 50),
+        Position = UDim2.fromOffset(30, 250),
         BackgroundColor3 = Theme.Accent,
         BorderSizePixel = 0,
         Text = "Verify Key",
         Font = Enum.Font.GothamBold,
-        TextSize = 22,
+        TextSize = 18,
         TextColor3 = Color3.fromRGB(255, 255, 255),
         AutoButtonColor = false,
         Parent = mainFrame
-    }, { corner(12) })
+    }, { corner(10) })
     
     -- Footer text
     local footerText = new("TextLabel", {
         Text = "Need a key? Contact the script developers",
         Font = Enum.Font.Gotham,
-        TextSize = 14,
+        TextSize = 13,
         TextColor3 = Theme.Dim,
         BackgroundTransparency = 1,
-        Size = UDim2.fromOffset(500, 20),
-        Position = UDim2.fromOffset(0, 372),
+        Size = UDim2.new(1, 0, 0, 20),
+        Position = UDim2.fromOffset(0, 340),
         Parent = mainFrame
     })
     
-    -- Entrance animation (scale from center)
-    mainFrame.Size = UDim2.fromOffset(0, 0)
-    mainFrame.Position = UDim2.new(0.5, 0, 0.5, 0) -- Start at screen center
-    mainFrame.GroupTransparency = 1
-    
-    TweenService:Create(mainFrame, 
-        TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), 
-        { 
-            Size = UDim2.fromOffset(500, 400),
-            Position = UDim2.new(0.5, -250, 0.5, -200), -- End at proper position
-            GroupTransparency = 0 
-        }
-    ):Play()
+    -- Entrance animation (Scale and Fade)
+    TweenService:Create(uiScale, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+    TweenService:Create(mainFrame, TweenInfo.new(0.4), { GroupTransparency = 0 }):Play()
     
     -- Button hover
     verifyButton.MouseEnter:Connect(function()
-        TweenService:Create(verifyButton, TweenInfo.new(0.2), {
-            BackgroundColor3 = Color3.fromRGB(102, 136, 255)
-        }):Play()
+        TweenService:Create(verifyButton, TweenInfo.new(0.2), { BackgroundColor3 = Color3.fromRGB(112, 146, 255) }):Play()
     end)
-    
     verifyButton.MouseLeave:Connect(function()
-        TweenService:Create(verifyButton, TweenInfo.new(0.2), {
-            BackgroundColor3 = Theme.Accent
-        }):Play()
+        TweenService:Create(verifyButton, TweenInfo.new(0.2), { BackgroundColor3 = Theme.Accent }):Play()
     end)
     
     -- Input focus effect
-    local inputStroke = inputFrame:FindFirstChildOfClass("UIStroke")
     keyInput.Focused:Connect(function()
         if inputStroke then
-            TweenService:Create(inputStroke, TweenInfo.new(0.3), {
-                Color = Theme.Accent,
-                Thickness = 2
-            }):Play()
+            TweenService:Create(inputStroke, TweenInfo.new(0.2), { Color = Theme.Accent, Thickness = 2 }):Play()
         end
     end)
     
     keyInput.FocusLost:Connect(function()
         if inputStroke then
-            TweenService:Create(inputStroke, TweenInfo.new(0.3), {
-                Color = Theme.Stroke,
-                Thickness = 1
-            }):Play()
+            TweenService:Create(inputStroke, TweenInfo.new(0.2), { Color = Theme.Stroke, Thickness = 1 }):Play()
         end
     end)
     
-    -- Verify function
+    -- Verify function (Original Logic Kept)
     local function VerifyKey()
         local key = keyInput.Text:gsub("%s+", "")
         
@@ -387,7 +357,6 @@ local function CreateAuthUI(onSuccess)
             return
         end
         
-        -- Disable inputs
         verifyButton.Text = "Verifying..."
         verifyButton.BackgroundColor3 = Theme.Off
         verifyButton.Active = false
@@ -397,12 +366,10 @@ local function CreateAuthUI(onSuccess)
         statusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
         statusLabel.Visible = true
         
-        -- Check key
         task.spawn(function()
             local data = checkKey(key)
             
             if data.status == "valid" then
-                -- Success!
                 statusLabel.Text = "✅ Key verified! Loading..."
                 statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
                 
@@ -412,22 +379,17 @@ local function CreateAuthUI(onSuccess)
                 wait(0.5)
                 
                 -- Exit animation
-                TweenService:Create(mainFrame, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
-                    Size = UDim2.fromOffset(0, 0),
-                    GroupTransparency = 1
-                }):Play()
+                TweenService:Create(uiScale, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In), { Scale = 0.85 }):Play()
+                TweenService:Create(mainFrame, TweenInfo.new(0.3), { GroupTransparency = 1 }):Play()
+                TweenService:Create(overlay, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
+                TweenService:Create(blur, TweenInfo.new(0.3), { Size = 0 }):Play()
                 
-                TweenService:Create(overlay, TweenInfo.new(0.4), {
-                    BackgroundTransparency = 1
-                }):Play()
-                
-                wait(0.5)
+                wait(0.4)
                 blur:Destroy()
                 screenGui:Destroy()
                 
                 onSuccess()
             else
-                -- Error
                 local messages = {
                     invalid = "Invalid key",
                     banned = "Key is banned",
@@ -440,27 +402,20 @@ local function CreateAuthUI(onSuccess)
                 statusLabel.Text = "❌ " .. (messages[data.status] or data.status)
                 statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
                 
-                -- Re-enable
                 verifyButton.Text = "Verify Key"
                 verifyButton.BackgroundColor3 = Theme.Accent
                 verifyButton.Active = true
                 keyInput.Active = true
                 
-                -- Shake animation
-                local originalPos = UDim2.new(0.5, -250, 0.5, -200)
-                for i = 1, 2 do
-                    TweenService:Create(mainFrame, TweenInfo.new(0.08), {
-                        Position = UDim2.new(0.5, -262, 0.5, -200)
-                    }):Play()
-                    wait(0.08)
-                    TweenService:Create(mainFrame, TweenInfo.new(0.08), {
-                        Position = UDim2.new(0.5, -238, 0.5, -200)
-                    }):Play()
-                    wait(0.08)
+                -- Correct Shake Animation using AnchorPoint
+                local originalPos = UDim2.fromScale(0.5, 0.5)
+                for i = 1, 3 do
+                    TweenService:Create(mainFrame, TweenInfo.new(0.05), { Position = UDim2.new(0.5, 12, 0.5, 0) }):Play()
+                    wait(0.05)
+                    TweenService:Create(mainFrame, TweenInfo.new(0.05), { Position = UDim2.new(0.5, -12, 0.5, 0) }):Play()
+                    wait(0.05)
                 end
-                TweenService:Create(mainFrame, TweenInfo.new(0.1), {
-                    Position = originalPos
-                }):Play()
+                TweenService:Create(mainFrame, TweenInfo.new(0.1), { Position = originalPos }):Play()
             end
         end)
     end
@@ -473,17 +428,15 @@ local function CreateAuthUI(onSuccess)
         end
     end)
     
-    -- Auto focus after animation
-    task.wait(0.6)
+    task.wait(0.5)
     keyInput:CaptureFocus()
 end
 
--- Create profile UI (optional, показывается только если нужно)
+-- Create profile UI (optional)
 local function CreateProfileUI()
     if not _G.CLL_Auth then return end
     
-    -- TODO: Implement profile UI based on Grok's design
-    -- For now, just print info
+    -- TODO: Implement profile UI
     print("[CLL] Profile loaded:")
     print("  Role:", _G.CLL_Auth.role)
     print("  Type:", _G.CLL_Auth.type)
