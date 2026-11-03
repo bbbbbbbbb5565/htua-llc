@@ -31,6 +31,56 @@
 ]]
 --// CLL menu вЂ” FULL INTEGRATION (main UI + legacy features + enhanced autoheal)
 local Players = game:GetService("Players")
+
+--[[
+    ╔═══════════════════════════════════════════════════════════════╗
+    ║                      ANTI-BYPASS PROTECTION                   ║
+    ╚═══════════════════════════════════════════════════════════════╝
+]]
+
+-- Check if loaded through official loader
+if not _G.CLL_Auth or not _G.CLL_Auth.status or _G.CLL_Auth.status ~= "valid" then
+    local function notify(title, text)
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = 10
+        })
+    end
+    
+    notify("CLL Error", "Direct access denied!\nUse official loader.")
+    
+    warn("[CLL] ============================================")
+    warn("[CLL] ANTI-BYPASS: Direct script access blocked")
+    warn("[CLL] This script must be loaded through the official loader")
+    warn("[CLL] Loadstring: https://github.com/bbbbbbbbb5565/htua-llc")
+    warn("[CLL] ============================================")
+    
+    return -- Stop execution
+end
+
+-- Verify auth data integrity
+local function verifyAuth()
+    if type(_G.CLL_Auth) ~= "table" then return false end
+    if not _G.CLL_Auth.status or _G.CLL_Auth.status ~= "valid" then return false end
+    if not _G.CLL_Auth.role then return false end
+    if not _G.CLL_Auth.type then return false end
+    return true
+end
+
+if not verifyAuth() then
+    warn("[CLL] Invalid authentication data - script terminated")
+    return
+end
+
+print("[CLL] ✅ Authentication verified")
+print("[CLL] Role:", _G.CLL_Auth.role)
+print("[CLL] Type:", _G.CLL_Auth.type)
+if _G.CLL_Auth.expires_at then
+    print("[CLL] Expires:", _G.CLL_Auth.expires_at)
+end
+
+local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
