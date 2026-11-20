@@ -1,6 +1,6 @@
 --[[
     ╔═══════════════════════════════════════════════════════════════╗
-    ║              CLL CHEAT - FULL INTEGRATION v11.5                ║
+    ║              CLL CHEAT - FULL INTEGRATION v11.6                ║
     ╠═══════════════════════════════════════════════════════════════╣
     ║  SUK head-hit, real crosshair, tracers, ESP outline nick,     ║
     ║  ChinaHat/Wings fix, VR hands, anti-flash/shake, antibypass   ║
@@ -94,6 +94,8 @@ local ST = {
 	SilentAimPart = "Head",
 	GunSoundVolume = 0.9,
 	VRTargetEnabled = false,
+	VRSwingSpeed = 14,
+	VRSwingAmp = 1.8,
 	ColorSelf = Color3.fromRGB(255, 50, 50),
 	ColorOthers = Color3.fromRGB(255, 220, 50),
 	ColorFriends = Color3.fromRGB(85, 255, 127),
@@ -289,7 +291,8 @@ local VRService = game:GetService("VRService")
 local SkyColor = Color3.fromRGB(50, 150, 255)
 
 -- Keybind State
-local Keys = { 
+local Keys = {
+	VRSwing = Enum.UserInputType.MouseButton1, 
 	ESP = Enum.KeyCode.Unknown, Hitbox = Enum.KeyCode.Unknown, SUK = Enum.KeyCode.Unknown, 
 	NoRecoil = Enum.KeyCode.Unknown, AntiCC = Enum.KeyCode.Unknown, 
 	Spin = Enum.KeyCode.Unknown, Fly = Enum.KeyCode.Unknown, WalkSpeed = Enum.KeyCode.Unknown, 
@@ -1289,17 +1292,23 @@ local function stopLocalInvis()
 	destroyInvisClone()
 	if char and root then
 		local dest = cloneCF or InvisSavedCF
-		if dest then
-			root.Anchored = false
-			root.CFrame = dest
-			root.AssemblyLinearVelocity = Vector3.zero
-		end
-		for _, p in ipairs(char:GetDescendants()) do
-			if p:IsA("BasePart") then p.LocalTransparencyModifier = 0
-			elseif p:IsA("Decal") then p.Transparency = 0 end
+		root.Anchored = false
+		if dest then root.CFrame = dest end
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.LocalTransparencyModifier = 0
+				if part ~= root or not ST.FlyEnabled then
+					part.Anchored = false
+				end
+			elseif part:IsA("Decal") or part:IsA("Texture") then
+				part.Transparency = 0
+			end
 		end
 		if hum then
 			hum.PlatformStand = false
+			hum.AutoRotate = true
 			hum.WalkSpeed = ST.WalkSpeedEnabled and ST.WalkSpeedValue or 16
 		end
 		local cam = workspace.CurrentCamera
@@ -1311,6 +1320,53 @@ local function stopLocalInvis()
 	InvisSavedCF = nil
 	InvisFarPos = nil
 end
+
+task.spawn(function()
+	while not ST.isUnloaded do
+		task.wait(0.4)
+		if not ST.LocalInvisEnabled then
+			local char = LocalPlayer.Character
+			if char then
+				for _, part in ipairs(char:GetDescendants()) do
+					if part:IsA("BasePart") and part.LocalTransparencyModifier > 0 then
+						part.LocalTransparencyModifier = 0
+					end
+				end
+				local root = char:FindFirstChild("HumanoidRootPart")
+				local head = char:FindFirstChild("Head")
+				if root and root.Anchored and head and head.LocalTransparencyModifier <= 0 and not ST.FlyEnabled and not ST.VREnabled then
+					-- leftover anchor from failed invis
+					local pos = root.Position
+					if pos.Magnitude > 20000 then
+						root.Anchored = false
+					end
+				end
+				local hum = char:FindFirstChildOfClass("Humanoid")
+				local cam = workspace.CurrentCamera
+				if cam and hum and not ST.VREnabled then
+					local sub = cam.CameraSubject
+					if not sub or not sub.Parent then
+						cam.CameraSubject = hum
+						cam.CameraType = Enum.CameraType.Custom
+					end
+				end
+			end
+			if InvisClone then destroyInvisClone() end
+		end
+	end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+	destroyInvisClone()
+	InvisSavedCF = nil
+	InvisFarPos = nil
+	if ST.LocalInvisEnabled then
+		task.delay(0.6, function()
+			if ST.LocalInvisEnabled then startLocalInvis() end
+		end)
+	end
+end)
+
 
 local function startLocalInvis()
 	local char = LocalPlayer.Character
@@ -2226,15 +2282,22 @@ local function vrShutdown()
 end
 
 
--- VR LMB punch swing
+-- VR swing bind (default LMB, rebindable in VR tab)
 UIS.InputBegan:Connect(function(input, gp)
 	if gp or ST.isUnloaded or not ST.VREnabled then return end
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		if not VRSwingActive then
-			VRSwingActive = true
-			VRSwingPhase = 0
-			VRSwingSide = (VRSwingSide or 1) * -1 -- alternate hands
+	local bind = Keys.VRSwing or Enum.UserInputType.MouseButton1
+	local hit = false
+	if typeof(bind) == "EnumItem" then
+		if bind.EnumType == Enum.UserInputType and input.UserInputType == bind then
+			hit = true
+		elseif bind.EnumType == Enum.KeyCode and input.KeyCode == bind then
+			hit = true
 		end
+	end
+	if hit and not VRSwingActive then
+		VRSwingActive = true
+		VRSwingPhase = 0
+		VRSwingSide = (VRSwingSide or 1) * -1
 	end
 end)
 
@@ -2320,26 +2383,36 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		leftHand = leftHand * CFrame.new(math.sin(vrHandShakeSeed + 2) * s, math.cos(vrHandShakeSeed + 2) * s, 0)
 	end
 
-	-- LMB swing punch (registers melee if hand passes through target)
+		-- Real arm swing arc (shoulder pivot) for melee registration
 	if VRSwingActive then
-		VRSwingPhase = VRSwingPhase + dt * 14 -- speed
-		local a = math.sin(math.clamp(VRSwingPhase, 0, math.pi)) -- 0..1..0
-		local amp = 1.8
-		local forward = (headCF.LookVector * Vector3.new(1, 0, 1))
-		if forward.Magnitude < 0.05 then forward = Vector3.new(0, 0, -1) else forward = forward.Unit end
-		local side = Vector3.new(-forward.Z, 0, forward.X) * VRSwingSide
-		local punch = forward * (amp * a) + side * (0.35 * a) + Vector3.new(0, 0.2 * a, 0)
-		if VRSwingSide > 0 then
-			rightHand = rightHand + punch
-			rightHand = rightHand * CFrame.Angles(math.rad(-50 * a), 0, math.rad(25 * a))
+		local spd = ST.VRSwingSpeed or 14
+		local amp = ST.VRSwingAmp or 1.8
+		VRSwingPhase = VRSwingPhase + dt * spd
+		local tphase = math.clamp(VRSwingPhase / math.pi, 0, 1)
+		-- ease: windup back, strike through, recover
+		local swing = math.sin(tphase * math.pi) -- 0→1→0
+		local strike = math.sin(tphase * math.pi * 0.5) -- 0→1 progressive
+		local torsoRef = torsoCF or hrp.CFrame
+		local look = Vector3.new(headCF.LookVector.X, 0, headCF.LookVector.Z)
+		if look.Magnitude < 0.05 then look = Vector3.new(0, 0, -1) else look = look.Unit end
+		local face = CFrame.lookAt(torsoRef.Position, torsoRef.Position + look)
+		local sideSign = VRSwingSide > 0 and 1 or -1
+		-- shoulder origin
+		local shoulder = face * CFrame.new(sideSign * 1.0, 0.55, 0)
+		-- arc: start raised/back, end forward/down
+		local pitch = math.rad(-20 - 95 * strike) -- from slight up to forward punch
+		local yaw = math.rad(sideSign * (25 - 40 * swing))
+		local roll = math.rad(sideSign * 15 * swing)
+		local reach = 0.6 + amp * swing
+		local handCF = shoulder * CFrame.Angles(pitch, yaw, roll) * CFrame.new(0, -0.2, -reach)
+		if sideSign > 0 then
+			rightHand = handCF
 		else
-			leftHand = leftHand + punch
-			leftHand = leftHand * CFrame.Angles(math.rad(-50 * a), 0, math.rad(-25 * a))
+			leftHand = handCF
 		end
 		if VRSwingPhase >= math.pi then
 			VRSwingActive = false
 			VRSwingPhase = 0
-			-- fire melee remote if exists
 			pcall(function()
 				if FxRemote then FxRemote:FireServer("Swing") end
 				local remotes = ReplicatedStorage:FindFirstChild("Remotes")
@@ -2353,7 +2426,7 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		end
 	end
 
-	-- dump VR_INIT Tracked mode: anchor limbs and set CFrame relative to HRP attrs
+-- dump VR_INIT Tracked mode: anchor limbs and set CFrame relative to HRP attrs
 	local function driveLimb(name, worldCF)
 		local limb = char:FindFirstChild(name)
 		if not limb or not limb:IsA("BasePart") then return end
@@ -2879,7 +2952,7 @@ fit(); workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(
 local header = new("Frame", { Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Parent = window })
 local logoLabel = label({ Text = "CLL", Font = Enum.Font.Michroma, TextSize = 26, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.fromOffset(100, 62), Position = UDim2.fromOffset(23, 0), Parent = header })
 logoLabel.TextColor3 = Color3.fromRGB(255, 255, 255) -- Always white
-local verLabel = label({ Text = "v11.5", Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(50, 62), Position = UDim2.fromOffset(85, 2), Parent = header })
+local verLabel = label({ Text = "v11.6", Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(50, 62), Position = UDim2.fromOffset(85, 2), Parent = header })
 local timeLabel = label({ Text = "Session: 00:00", Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(150, 62), Position = UDim2.fromOffset(150, 0), Parent = header })
 task.spawn(function()
 	while not ST.isUnloaded do
@@ -3329,11 +3402,12 @@ local function buildKeybinds()
 end
 
 local function buildVR()
-	local scroll = new("ScrollingFrame", { Size = UDim2.new(1, -24, 1, -24), Position = UDim2.fromOffset(12, 12), BackgroundColor3 = Theme.Panel, BorderSizePixel = 0, ScrollBarThickness = 3, CanvasSize = UDim2.new(0, 0, 0, 800), Parent = pages.VR }, { corner(12), stroke() })
+	local scroll = new("ScrollingFrame", { Size = UDim2.new(1, -24, 1, -24), Position = UDim2.fromOffset(12, 12), BackgroundColor3 = Theme.Panel, BorderSizePixel = 0, ScrollBarThickness = 3, CanvasSize = UDim2.new(0, 0, 0, 1100), Parent = pages.VR }, { corner(12), stroke() })
 	
 	label({ Text = "VR CONTROL (PC ONLY)", Font = Enum.Font.GothamMedium, TextSize = 14, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(300, 24), Position = UDim2.fromOffset(PAD, 20), Parent = scroll })
 	divider(scroll, 55)
-	toggle(scroll, 80, "Enable VR Mode", function(v) 
+	local y = 80
+	toggle(scroll, y, "Enable VR Mode", function(v) 
 		ST.VREnabled = v
 		if v then
 			local char = LocalPlayer.Character
@@ -3343,15 +3417,62 @@ local function buildVR()
 			vrShutdown()
 		end
 	end, false)
-	toggle(scroll, 125, "VR Target Mode", function(v) ST.VRTargetEnabled = v end, false)
-	toggle(scroll, 170, "Enable Hand Shake", function(v) ST.VRShakeEnabled = v end, false)
-	slider(scroll, 175, "Shake Intensity", 0, 2, ST.VRShakeIntensity, 0.1, function(v) ST.VRShakeIntensity = v end)
-	slider(scroll, 225, "Hand Extend (forward)", 0, 12, ST.VRHandExtend, 0.25, function(v) ST.VRHandExtend = v end)
+	y = y + 48
+	toggle(scroll, y, "VR Target Mode", function(v) ST.VRTargetEnabled = v end, false)
+	y = y + 48
+	toggle(scroll, y, "Enable Hand Shake", function(v) ST.VRShakeEnabled = v end, false)
+	y = y + 52
+	slider(scroll, y, "Shake Intensity", 0, 2, ST.VRShakeIntensity, 0.1, function(v) ST.VRShakeIntensity = v end)
+	y = y + 55
+	slider(scroll, y, "Hand Extend (forward)", 0, 12, ST.VRHandExtend, 0.25, function(v) ST.VRHandExtend = v end)
+	y = y + 55
+	slider(scroll, y, "Swing Speed", 6, 24, ST.VRSwingSpeed or 14, 1, function(v) ST.VRSwingSpeed = v end)
+	y = y + 55
+	slider(scroll, y, "Swing Amplitude", 0.8, 3.5, ST.VRSwingAmp or 1.8, 0.1, function(v) ST.VRSwingAmp = v end)
+	y = y + 50
+	-- swing bind button
+	label({ Text = "Swing Bind", TextSize = 13, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(120, 24), Position = UDim2.fromOffset(PAD, y - 12), Parent = scroll })
+	local swingBindBtn = new("TextButton", {
+		Text = "LMB (MouseButton1)",
+		Font = Enum.Font.GothamMedium,
+		TextSize = 12,
+		TextColor3 = Theme.Text,
+		AutoButtonColor = false,
+		Size = UDim2.fromOffset(160, 28),
+		Position = UDim2.new(1, -PAD - 160, 0, y - 14),
+		BackgroundColor3 = Theme.Row,
+		Parent = scroll,
+	}, { corner(8), stroke() })
+	local listeningSwing = false
+	swingBindBtn.MouseButton1Click:Connect(function()
+		if listeningSwing then return end
+		listeningSwing = true
+		swingBindBtn.Text = "Press key/mouse..."
+		local conn
+		conn = UIS.InputBegan:Connect(function(input, gp)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.MouseButton2
+				or input.UserInputType == Enum.UserInputType.MouseButton3 then
+				Keys.VRSwing = input.UserInputType
+				swingBindBtn.Text = input.UserInputType.Name
+				listeningSwing = false
+				conn:Disconnect()
+			elseif input.KeyCode and input.KeyCode ~= Enum.KeyCode.Unknown then
+				Keys.VRSwing = input.KeyCode
+				swingBindBtn.Text = input.KeyCode.Name
+				listeningSwing = false
+				conn:Disconnect()
+			end
+		end)
+	end)
+	y = y + 48
+	divider(scroll, y)
+	y = y + 20
+	label({ Text = "VR TARGETS", Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(200, 16), Position = UDim2.fromOffset(PAD, y), Parent = scroll })
+	y = y + 25
 	
-	divider(scroll, 275)
-	label({ Text = "VR TARGETS", Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(200, 16), Position = UDim2.fromOffset(PAD, 295), Parent = scroll })
-	
-	local vrList = new("ScrollingFrame", { Size = UDim2.new(1, -40, 0, 150), Position = UDim2.fromOffset(PAD, 320), BackgroundTransparency = 1, BorderSizePixel = 0, Parent = scroll }, { new("UIListLayout", { Padding = UDim.new(0, 4) }) })
+	local vrList = new("ScrollingFrame", { Size = UDim2.new(1, -40, 0, 150), Position = UDim2.fromOffset(PAD, y), BackgroundTransparency = 1, BorderSizePixel = 0, Parent = scroll }, { new("UIListLayout", { Padding = UDim.new(0, 4) }) })
+	y = y + 160
 	local vrRows = {}
 	local function refreshVRList()
 		for _, r in pairs(vrRows) do if r.frame then r.frame:Destroy() end end
@@ -3370,12 +3491,18 @@ local function buildVR()
 	refreshVRList()
 	Players.PlayerAdded:Connect(function() task.defer(refreshVRList) end); Players.PlayerRemoving:Connect(function(p) VRSelectedTargets[p] = nil; task.defer(refreshVRList) end)
 
-	divider(scroll, 440)
-	label({ Text = "VR AURA", Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(200, 16), Position = UDim2.fromOffset(PAD, 460), Parent = scroll })
-	toggle(scroll, 490, "Enable VR Aura", function(v) ST.VRAuraEnabled = v end, false)
-	slider(scroll, 540, "Aura Speed", 1, 20, ST.VRAuraSpeed, 1, function(v) ST.VRAuraSpeed = v end)
-	slider(scroll, 590, "Aura Radius", 1, 15, ST.VRAuraRadius, 1, function(v) ST.VRAuraRadius = v end)
-	slider(scroll, 640, "Aura Height", -5, 10, ST.VRAuraHeight, 1, function(v) ST.VRAuraHeight = v end)
+	y = y + 20
+	divider(scroll, y)
+	y = y + 24
+	label({ Text = "VR AURA", Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(200, 16), Position = UDim2.fromOffset(PAD, y), Parent = scroll })
+	y = y + 28
+	toggle(scroll, y, "Enable VR Aura", function(v) ST.VRAuraEnabled = v end, false)
+	y = y + 50
+	slider(scroll, y, "Aura Speed", 1, 20, ST.VRAuraSpeed, 1, function(v) ST.VRAuraSpeed = v end)
+	y = y + 55
+	slider(scroll, y, "Aura Radius", 1, 15, ST.VRAuraRadius, 1, function(v) ST.VRAuraRadius = v end)
+	y = y + 55
+	slider(scroll, y, "Aura Height", -5, 10, ST.VRAuraHeight, 1, function(v) ST.VRAuraHeight = v end)
 end
 
 local function buildProfile()
