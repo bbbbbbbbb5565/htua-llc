@@ -1,6 +1,6 @@
 --[[
     ╔═══════════════════════════════════════════════════════════════╗
-    ║              CLL CHEAT - FULL INTEGRATION v11.6                ║
+    ║              CLL CHEAT - FULL INTEGRATION v11.7                ║
     ╠═══════════════════════════════════════════════════════════════╣
     ║  SUK head-hit, real crosshair, tracers, ESP outline nick,     ║
     ║  ChinaHat/Wings fix, VR hands, anti-flash/shake, antibypass   ║
@@ -2253,14 +2253,13 @@ local function vrShutdown()
 		pcall(function()
 			char:SetAttribute("VR", false)
 			char:SetAttribute("DID_VR", false)
-			local head = char:FindFirstChild("Head")
-			if head then
-				pcall(function() head.CollisionGroup = "Default" end)
-				head.Anchored = false
-			end
-			for _, n in ipairs({"Right Arm","Left Arm","RightUpperArm","LeftUpperArm","RightLowerArm","LeftLowerArm","HumanoidRootPart"}) do
-				local p = char:FindFirstChild(n)
-				if p and p:IsA("BasePart") then p.Anchored = false end
+			for _, p in ipairs(char:GetDescendants()) do
+				if p:IsA("BasePart") then
+					p.Anchored = false
+				end
+				if p:IsA("Motor6D") then
+					p.Enabled = true
+				end
 			end
 		end)
 	end
@@ -2345,20 +2344,17 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		headCF = cam.CFrame
 	end
 
-	-- hands at TORSO height (not hanging from head), slight forward
+	-- hands at TORSO height; Hand Extend = forward studs (0..10), not sideways
 	local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso") or hrp
 	local torsoCF = torso and torso.CFrame or hrp.CFrame
-	local reach = math.clamp(ST.VRHandExtend or 0, 0, 100) * 0.05 -- scale extend
-	local rightHand = torsoCF * CFrame.new(1.1 + reach, 0.15, -0.6)
-	local leftHand = torsoCF * CFrame.new(-1.1 - reach, 0.15, -0.6)
-	-- still face roughly camera yaw
+	local reach = math.clamp(ST.VRHandExtend or 0, 0, 10) -- studs forward
 	local look = headCF.LookVector
 	local flat = Vector3.new(look.X, 0, look.Z)
-	if flat.Magnitude > 0.05 then
-		local face = CFrame.lookAt(torsoCF.Position, torsoCF.Position + flat.Unit)
-		rightHand = face * CFrame.new(1.1 + reach, 0.15, -0.6)
-		leftHand = face * CFrame.new(-1.1 - reach, 0.15, -0.6)
-	end
+	if flat.Magnitude < 0.05 then flat = Vector3.new(0, 0, -1) else flat = flat.Unit end
+	local face = CFrame.lookAt(torsoCF.Position, torsoCF.Position + flat)
+	-- local offset: +X right, -Z forward
+	local rightHand = face * CFrame.new(1.05, 0.2, -0.55 - reach)
+	local leftHand = face * CFrame.new(-1.05, 0.2, -0.55 - reach)
 
 	-- VR target: body + hands to selected players (slightly above head so hits register)
 	local vrTargets = (ST.VRTargetEnabled and GetVRTargets and GetVRTargets()) or {}
@@ -2383,33 +2379,26 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		leftHand = leftHand * CFrame.new(math.sin(vrHandShakeSeed + 2) * s, math.cos(vrHandShakeSeed + 2) * s, 0)
 	end
 
-		-- Real arm swing arc (shoulder pivot) for melee registration
+		-- Forward punch along look direction (not backwards)
 	if VRSwingActive then
 		local spd = ST.VRSwingSpeed or 14
 		local amp = ST.VRSwingAmp or 1.8
 		VRSwingPhase = VRSwingPhase + dt * spd
 		local tphase = math.clamp(VRSwingPhase / math.pi, 0, 1)
-		-- ease: windup back, strike through, recover
 		local swing = math.sin(tphase * math.pi) -- 0→1→0
-		local strike = math.sin(tphase * math.pi * 0.5) -- 0→1 progressive
 		local torsoRef = torsoCF or hrp.CFrame
-		local look = Vector3.new(headCF.LookVector.X, 0, headCF.LookVector.Z)
-		if look.Magnitude < 0.05 then look = Vector3.new(0, 0, -1) else look = look.Unit end
-		local face = CFrame.lookAt(torsoRef.Position, torsoRef.Position + look)
+		local lookFlat = Vector3.new(headCF.LookVector.X, 0, headCF.LookVector.Z)
+		if lookFlat.Magnitude < 0.05 then lookFlat = Vector3.new(0, 0, -1) else lookFlat = lookFlat.Unit end
+		local face = CFrame.lookAt(torsoRef.Position, torsoRef.Position + lookFlat)
 		local sideSign = VRSwingSide > 0 and 1 or -1
-		-- shoulder origin
-		local shoulder = face * CFrame.new(sideSign * 1.0, 0.55, 0)
-		-- arc: start raised/back, end forward/down
-		local pitch = math.rad(-20 - 95 * strike) -- from slight up to forward punch
-		local yaw = math.rad(sideSign * (25 - 40 * swing))
-		local roll = math.rad(sideSign * 15 * swing)
-		local reach = 0.6 + amp * swing
-		local handCF = shoulder * CFrame.Angles(pitch, yaw, roll) * CFrame.new(0, -0.2, -reach)
-		if sideSign > 0 then
-			rightHand = handCF
-		else
-			leftHand = handCF
-		end
+		local shoulder = face * CFrame.new(sideSign * 1.05, 0.45, 0)
+		-- windup: hand slightly back; strike: extend forward along -Z of face
+		local back = (1 - swing) * 0.35
+		local forward = 0.5 + amp * swing
+		local handCF = shoulder
+			* CFrame.Angles(math.rad(-10 - 70 * swing), math.rad(sideSign * 8), math.rad(sideSign * 12 * swing))
+			* CFrame.new(0, -0.15, -forward + back)
+		if sideSign > 0 then rightHand = handCF else leftHand = handCF end
 		if VRSwingPhase >= math.pi then
 			VRSwingActive = false
 			VRSwingPhase = 0
@@ -2418,16 +2407,14 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 				local remotes = ReplicatedStorage:FindFirstChild("Remotes")
 				if remotes then
 					local sw = remotes:FindFirstChild("Swing") or remotes:FindFirstChild("Melee")
-					if sw and sw:IsA("RemoteEvent") then
-						sw:FireServer("Swing")
-					end
+					if sw and sw:IsA("RemoteEvent") then sw:FireServer("Swing") end
 				end
 			end)
 		end
 	end
 
--- dump VR_INIT Tracked mode: anchor limbs and set CFrame relative to HRP attrs
-	local function driveLimb(name, worldCF)
+-- drive arms only (anchored). Head not anchored — prevents full-body freeze.
+	local function driveArm(name, worldCF)
 		local limb = char:FindFirstChild(name)
 		if not limb or not limb:IsA("BasePart") then return end
 		limb.CanCollide = false
@@ -2436,9 +2423,12 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		limb.AssemblyAngularVelocity = Vector3.zero
 		limb.CFrame = worldCF
 	end
-	driveLimb("Right Arm", rightHand)
-	driveLimb("Left Arm", leftHand)
-	driveLimb("Head", headCF)
+	driveArm("Right Arm", rightHand)
+	driveArm("Left Arm", leftHand)
+	pcall(function()
+		driveArm("RightUpperArm", rightHand)
+		driveArm("LeftUpperArm", leftHand)
+	end)
 
 	-- attributes the game reads
 	pcall(function()
@@ -2952,7 +2942,7 @@ fit(); workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(
 local header = new("Frame", { Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Parent = window })
 local logoLabel = label({ Text = "CLL", Font = Enum.Font.Michroma, TextSize = 26, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.fromOffset(100, 62), Position = UDim2.fromOffset(23, 0), Parent = header })
 logoLabel.TextColor3 = Color3.fromRGB(255, 255, 255) -- Always white
-local verLabel = label({ Text = "v11.6", Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(50, 62), Position = UDim2.fromOffset(85, 2), Parent = header })
+local verLabel = label({ Text = "v11.7", Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(50, 62), Position = UDim2.fromOffset(85, 2), Parent = header })
 local timeLabel = label({ Text = "Session: 00:00", Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(150, 62), Position = UDim2.fromOffset(150, 0), Parent = header })
 task.spawn(function()
 	while not ST.isUnloaded do
@@ -3424,7 +3414,7 @@ local function buildVR()
 	y = y + 52
 	slider(scroll, y, "Shake Intensity", 0, 2, ST.VRShakeIntensity, 0.1, function(v) ST.VRShakeIntensity = v end)
 	y = y + 55
-	slider(scroll, y, "Hand Extend (forward)", 0, 12, ST.VRHandExtend, 0.25, function(v) ST.VRHandExtend = v end)
+	slider(scroll, y, "Hand Extend forward (studs)", 0, 10, ST.VRHandExtend, 0.25, function(v) ST.VRHandExtend = v end)
 	y = y + 55
 	slider(scroll, y, "Swing Speed", 6, 24, ST.VRSwingSpeed or 14, 1, function(v) ST.VRSwingSpeed = v end)
 	y = y + 55
