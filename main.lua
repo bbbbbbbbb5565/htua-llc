@@ -1,6 +1,6 @@
 --[[
     ╔═══════════════════════════════════════════════════════════════╗
-    ║              CLL CHEAT - FULL INTEGRATION v11.7                ║
+    ║              CLL CHEAT - FULL INTEGRATION v11.8                ║
     ╠═══════════════════════════════════════════════════════════════╣
     ║  SUK head-hit, real crosshair, tracers, ESP outline nick,     ║
     ║  ChinaHat/Wings fix, VR hands, anti-flash/shake, antibypass   ║
@@ -569,9 +569,9 @@ local Cosmetics = (function()
 			local color = CFG.WingColor
 			for _, w in ipairs(state.wings) do
 				local s = w.s
-				-- old v2 mount: behind back via torso.Size.Z/2 + 0.1 and YAW
+				-- EXACT v2 mount from pasted-text-2.txt
 				local base = tor.CFrame
-					* CFrame.new(s * 0.85, WING_Y + 0.2, 1.15)
+					* CFrame.new(s * 0.35, WING_Y, tor.Size.Z / 2 + 0.1)
 					* CFrame.Angles(0, -s * WING_YAW, 0)
 					* CFrame.Angles(0, 0, s * flap)
 				for _, it in ipairs(w.items) do
@@ -1923,11 +1923,12 @@ RunService.RenderStepped:Connect(function()
 								data.HealthFill.Size = UDim2.new(0, 3, 0, h * hp); data.HealthFill.Position = UDim2.new(0, x - 6, 0, y + (h - h * hp))
 								data.HealthFill.BackgroundColor3 = Color3.fromRGB(255, 0, 0):Lerp(Color3.fromRGB(0, 255, 0), hp)
 								if data.HealthText then
-									data.HealthText.Text = string.format("%d/%d", math.floor(hum.Health + 0.5), math.floor(hum.MaxHealth + 0.5))
-									data.HealthText.Position = UDim2.new(0, sp.X, 0, y - 2)
-									data.HealthText.Size = UDim2.new(0, 80, 0, 14)
-									data.HealthText.AnchorPoint = Vector2.new(0.5, 1)
-									data.HealthText.TextXAlignment = Enum.TextXAlignment.Center
+									data.HealthText.Text = tostring(math.floor(hum.Health + 0.5))
+									-- beside HP bar (left of bar), not above
+									data.HealthText.AnchorPoint = Vector2.new(1, 0.5)
+									data.HealthText.Position = UDim2.new(0, x - 10, 0, y + h * 0.5)
+									data.HealthText.Size = UDim2.new(0, 36, 0, 14)
+									data.HealthText.TextXAlignment = Enum.TextXAlignment.Right
 								end
 							end
 							data.Distance.Visible = ESP_Config.Enabled and ESP_Config.Distance
@@ -2154,18 +2155,61 @@ do
 	task.spawn(function()
 		while not ST.isUnloaded do
 			task.wait(0.5)
-			if ST.VREnabled then
+			local char = LocalPlayer.Character
+			if not char then
+			elseif ST.VREnabled then
 				pcall(function()
-					local char = LocalPlayer.Character
-					if char then
-						char:SetAttribute("DID_VR", true)
-						char:SetAttribute("VR", true)
-					end
+					char:SetAttribute("DID_VR", true)
+					char:SetAttribute("VR", true)
+				end)
+			else
+				-- VR off: never leave server/client in VR pose
+				pcall(function()
+					char:SetAttribute("DID_VR", false)
+					char:SetAttribute("VR", false)
 				end)
 			end
 		end
 	end)
 end
+
+
+--// ==================== UNFREEZE (post-11.5 statue fix) ====================
+-- If VR/Heal/Invis/Fly are OFF, never leave body anchored or motors disabled
+task.spawn(function()
+	while not ST.isUnloaded do
+		task.wait(0.35)
+		if ST.VREnabled or ST.LocalInvisEnabled or ST.HealEnabled or ST.FlyEnabled then
+			-- skip
+		else
+			local char = LocalPlayer.Character
+			if char then
+				pcall(function()
+					char:SetAttribute("DID_VR", false)
+					char:SetAttribute("VR", false)
+					local hum = char:FindFirstChildOfClass("Humanoid")
+					if hum and hum.PlatformStand then
+						hum.PlatformStand = false
+					end
+					for _, d in ipairs(char:GetDescendants()) do
+						if d:IsA("BasePart") then
+							-- never keep limbs/root frozen outside special modes
+							if d.Anchored and d.Name ~= "HumanoidRootPart" then
+								d.Anchored = false
+							elseif d.Name == "HumanoidRootPart" and d.Anchored then
+								d.Anchored = false
+							end
+						elseif d:IsA("Motor6D") then
+							if not d.Enabled then
+								d.Enabled = true
+							end
+						end
+					end
+				end)
+			end
+		end
+	end
+end)
 
 --// ==================== VR IMPLEMENTATION (dump-faithful) ====================
 -- Game path (from dump):
@@ -2310,10 +2354,17 @@ UIS.InputChanged:Connect(function(input)
 		* CFrame.Angles(math.rad(-d.Y * 0.35), 0, 0)
 end)
 
+local vrWasOn = false
 RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, function(dt)
-	if ST.isUnloaded or not ST.VREnabled then
+	if ST.isUnloaded then return end
+	if not ST.VREnabled then
+		if vrWasOn then
+			vrWasOn = false
+			pcall(vrShutdown)
+		end
 		return
 	end
+	vrWasOn = true
 
 	local cam = workspace.CurrentCamera
 	local char = LocalPlayer.Character
@@ -2942,7 +2993,7 @@ fit(); workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(
 local header = new("Frame", { Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Parent = window })
 local logoLabel = label({ Text = "CLL", Font = Enum.Font.Michroma, TextSize = 26, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.fromOffset(100, 62), Position = UDim2.fromOffset(23, 0), Parent = header })
 logoLabel.TextColor3 = Color3.fromRGB(255, 255, 255) -- Always white
-local verLabel = label({ Text = "v11.7", Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(50, 62), Position = UDim2.fromOffset(85, 2), Parent = header })
+local verLabel = label({ Text = "v11.8", Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(50, 62), Position = UDim2.fromOffset(85, 2), Parent = header })
 local timeLabel = label({ Text = "Session: 00:00", Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(150, 62), Position = UDim2.fromOffset(150, 0), Parent = header })
 task.spawn(function()
 	while not ST.isUnloaded do
