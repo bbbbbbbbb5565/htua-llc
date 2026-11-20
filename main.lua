@@ -15,6 +15,44 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local LocalPlayer = Players.LocalPlayer
 
+-- ==================== LOADER GATE ====================
+do
+	local auth = rawget(_G, "CLL_Auth")
+	local session = rawget(_G, "CLL_SESSION")
+
+	local function kill(msg)
+		warn("[CLL] " .. tostring(msg))
+		pcall(function()
+			if getgenv then
+				getgenv().CLL = nil
+			end
+		end)
+		error(msg, 0)
+	end
+
+	-- прямой loadstring(main) / подмена URL лоадера
+	if type(session) ~= "table" or session.ok ~= true then
+		kill("Load via loader only (no session)")
+	end
+
+	if type(auth) ~= "table" or auth.status ~= "valid" then
+		kill("Auth missing or invalid")
+	end
+
+	-- сессия не старше 2 минут (после лоадера)
+	if type(session.ts) ~= "number" or (tick() - session.ts) > 120 then
+		kill("Session expired — restart loader")
+	end
+
+	-- опционально: повторная метка, что зашёл только лоадер
+	if rawget(_G, "CLL_LOADED_BY_LOADER") ~= true then
+		-- лоадер должен ставить это ПЕРЕД loadstring(main)
+		-- если не ставит — раскомментируй строку ниже после правки лоадера
+		-- kill("Loader flag missing")
+	end
+end
+-- ==================== END GATE ====================
+
 --// ==================== UI ANIMATION PRESETS ====================
 local ES, ED = Enum.EasingStyle, Enum.EasingDirection
 local SPEED = 1.0
