@@ -186,29 +186,37 @@ local function checkKey(key, retry, urlIndex)
 end
 
 local function applyAuth(data)
-	_G.CLL_Auth = {
+	local auth = {
 		status = data.status,
 		role = data.role,
 		type = data.type,
 		expires_at = data.expires_at,
 		whitelist = data.whitelist == true,
 	}
-	_G.CLL_Whitelist = {}
+	local whitelist = {}
 	if data.whitelist == true then
-		_G.CLL_Whitelist[LocalPlayer.UserId] = true
+		whitelist[LocalPlayer.UserId] = true
 	elseif type(data.whitelist) == "table" then
 		for _, id in ipairs(data.whitelist) do
 			local n = tonumber(id)
-			if n then
-				_G.CLL_Whitelist[n] = true
-			end
+			if n then whitelist[n] = true end
 		end
 	end
-	_G.CLL_SESSION = {
+	local session = {
 		ok = true,
 		ts = tick(),
-		auth = _G.CLL_Auth,
+		auth = auth,
 	}
+	local function write(tbl)
+		if type(tbl) ~= "table" then return end
+		tbl.CLL_Auth = auth
+		tbl.CLL_SESSION = session
+		tbl.CLL_Whitelist = whitelist
+	end
+	write(_G)
+	pcall(function()
+		if getgenv then write(getgenv()) end
+	end)
 end
 
 local function statusMessage(data)
@@ -238,20 +246,38 @@ local function statusMessage(data)
 end
 
 local function LoadMainScript()
-	if not _G.CLL_SESSION or not _G.CLL_SESSION.ok then
+	local sess = _G.CLL_SESSION
+	pcall(function()
+		if getgenv and getgenv().CLL_SESSION then sess = getgenv().CLL_SESSION end
+	end)
+	if not sess or not sess.ok then
 		warn("[CLL] Refusing main load: no session")
 		return
 	end
 	local ok, err = pcall(function()
 		local src = game:HttpGet(MAIN_SCRIPT_URL)
 		assert(type(src) == "string" and #src > 50, "empty main")
-		_G.CLL_LOADED_BY_LOADER = true
-		_G.CLL_SESSION = {
+
+		local function stamp(tbl)
+			if type(tbl) ~= "table" then return end
+			tbl.CLL_LOADED_BY_LOADER = true
+			tbl.CLL_LOADED_FROM_LOADER = true
+			tbl.CLL_Auth = _G.CLL_Auth or (getgenv and getgenv().CLL_Auth)
+			tbl.CLL_SESSION = {
 				ok = true,
 				ts = tick(),
-				auth = _G.CLL_Auth,
-	}
-	loadstring(src)()
+				auth = tbl.CLL_Auth,
+			}
+		end
+		stamp(_G)
+		pcall(function()
+			if getgenv then stamp(getgenv()) end
+		end)
+
+		print("[CLL] flags OK, loading main (#" .. #src .. ")")
+		local fn, lerr = loadstring(src)
+		assert(fn, tostring(lerr))
+		fn()
 	end)
 	if not ok then
 		warn("[CLL] Failed to load main:", err)
