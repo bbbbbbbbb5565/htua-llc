@@ -1,6 +1,6 @@
 --[[
     ╔═══════════════════════════════════════════════════════════════╗
-    ║              CLL CHEAT - FULL INTEGRATION v11.4                ║
+    ║              CLL CHEAT - FULL INTEGRATION v11.5                ║
     ╠═══════════════════════════════════════════════════════════════╣
     ║  SUK head-hit, real crosshair, tracers, ESP outline nick,     ║
     ║  ChinaHat/Wings fix, VR hands, anti-flash/shake, antibypass   ║
@@ -101,68 +101,89 @@ local ST = {
 
 
 --// ==================== ANTI-BYPASS (hard gate: loader.lua only) ====================
--- Compatible with current htua-llc loader which sets:
---   _G.CLL_LOADED_BY_LOADER = true
---   _G.CLL_Auth = { status = "valid", ... }
---   _G.CLL_SESSION = { ok = true, ... }
--- Direct loadstring(main.lua) without these flags is blocked.
+-- Reads flags from getgenv(), _G and shared — executors differ.
+-- Loader MUST set before loadstring(main):
+--   getgenv().CLL_LOADED_BY_LOADER = true
+--   getgenv().CLL_Auth = { status = "valid", ... }
+--   getgenv().CLL_SESSION = { ok = true, ts = tick(), ... }
 do
-	local env = _G
+	local function pick(...)
+		for i = 1, select("#", ...) do
+			local v = select(i, ...)
+			if v ~= nil then return v end
+		end
+		return nil
+	end
+
+	local genv = _G
 	pcall(function()
-		if getgenv then env = getgenv() end
+		if getgenv then genv = getgenv() end
 	end)
 
 	local fromLoader = false
 	local authOk = false
 	local sessionOk = false
+	local auth, sess
 
 	pcall(function()
-		-- accept BOTH flag names (old gate used FROM, real loader uses BY)
-		fromLoader = (env.CLL_LOADED_BY_LOADER == true)
-			or (env.CLL_LOADED_FROM_LOADER == true)
-			or (rawget(_G, "CLL_LOADED_BY_LOADER") == true)
-			or (rawget(_G, "CLL_LOADED_FROM_LOADER") == true)
+		local f1 = rawget(genv, "CLL_LOADED_BY_LOADER")
+		local f2 = rawget(genv, "CLL_LOADED_FROM_LOADER")
+		local f3 = rawget(_G, "CLL_LOADED_BY_LOADER")
+		local f4 = rawget(_G, "CLL_LOADED_FROM_LOADER")
+		fromLoader = (f1 == true) or (f2 == true) or (f3 == true) or (f4 == true)
 
-		local auth = env.CLL_Auth or rawget(_G, "CLL_Auth")
+		auth = pick(rawget(genv, "CLL_Auth"), rawget(_G, "CLL_Auth"))
 		if type(auth) == "table" then
 			local st = string.lower(tostring(auth.status or ""))
 			authOk = (st == "valid" or st == "ok")
 		end
 
-		local sess = env.CLL_SESSION or rawget(_G, "CLL_SESSION")
+		sess = pick(rawget(genv, "CLL_SESSION"), rawget(_G, "CLL_SESSION"))
 		if type(sess) == "table" and sess.ok == true then
-			sessionOk = true
+			-- session must be fresh (loader just set it) — blocks stale fakes a bit
+			local age = tick() - (tonumber(sess.ts) or 0)
+			if age >= 0 and age < 120 then
+				sessionOk = true
+			elseif sess.ts == nil then
+				sessionOk = true -- older loaders without ts
+			end
 		end
 	end)
 
-	-- need loader flag + (valid auth OR session.ok)
-	local allowed = fromLoader and (authOk or sessionOk)
+	-- Prefer loader flag. Fallback: fresh session + valid auth (same boot from loader
+	-- when flag was only written to a table loadstring cannot see — rare).
+	local allowed = (fromLoader and (authOk or sessionOk))
+		or (sessionOk and authOk)
 
 	_G.CLL_ANTIBYPASS = {
 		ok = allowed,
 		fromLoader = fromLoader,
 		authOk = authOk,
 		sessionOk = sessionOk,
-		check = function()
-			if not fromLoader then return false, "loader flag missing (main.lua direct load)" end
-			if not (authOk or sessionOk) then return false, "auth/session missing" end
-			return true
-		end,
 	}
+	pcall(function()
+		if genv ~= _G then
+			genv.CLL_ANTIBYPASS = _G.CLL_ANTIBYPASS
+		end
+	end)
 
 	if not allowed then
-		warn("[CLL] blocked: run via loader.lua + valid key (direct main.lua loadstring denied)")
-		warn("[CLL] debug: fromLoader=", tostring(fromLoader), "authOk=", tostring(authOk), "sessionOk=", tostring(sessionOk))
+		warn("[CLL] blocked: run via loader.lua + valid key")
+		warn("[CLL] debug fromLoader=", tostring(fromLoader), "authOk=", tostring(authOk), "sessionOk=", tostring(sessionOk))
+		warn("[CLL] tip: loader must set getgenv().CLL_LOADED_BY_LOADER = true before loadstring")
 		return
 	end
 
-	-- optional one-shot: clear BY flag so a second naked main load fails
-	-- (loader always re-sets it before each legitimate load)
+	-- mirror auth into both envs for Profile tab
 	pcall(function()
-		env.CLL_LOADED_BY_LOADER = nil
-		env.CLL_LOADED_FROM_LOADER = nil
-		rawset(_G, "CLL_LOADED_BY_LOADER", nil)
-		rawset(_G, "CLL_LOADED_FROM_LOADER", nil)
+		if auth then
+			_G.CLL_Auth = auth
+			if genv then genv.CLL_Auth = auth end
+		end
+		if sess then
+			_G.CLL_SESSION = sess
+			if genv then genv.CLL_SESSION = sess end
+		end
 	end)
 end
 
@@ -2858,7 +2879,7 @@ fit(); workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(
 local header = new("Frame", { Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Parent = window })
 local logoLabel = label({ Text = "CLL", Font = Enum.Font.Michroma, TextSize = 26, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.fromOffset(100, 62), Position = UDim2.fromOffset(23, 0), Parent = header })
 logoLabel.TextColor3 = Color3.fromRGB(255, 255, 255) -- Always white
-local verLabel = label({ Text = "v11.4", Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(50, 62), Position = UDim2.fromOffset(85, 2), Parent = header })
+local verLabel = label({ Text = "v11.5", Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(50, 62), Position = UDim2.fromOffset(85, 2), Parent = header })
 local timeLabel = label({ Text = "Session: 00:00", Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(150, 62), Position = UDim2.fromOffset(150, 0), Parent = header })
 task.spawn(function()
 	while not ST.isUnloaded do
