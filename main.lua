@@ -45,11 +45,11 @@ do
 	end
 
 	-- опционально: повторная метка, что зашёл только лоадер
-	if rawget(_G, "CLL_LOADED_BY_LOADER") ~= true then
+	-- if rawget(_G, "CLL_LOADED_BY_LOADER") ~= true then
 		-- лоадер должен ставить это ПЕРЕД loadstring(main)
 		-- если не ставит — раскомментируй строку ниже после правки лоадера
 		-- kill("Loader flag missing")
-	end
+	-- end
 end
 -- ==================== END GATE ====================
 
