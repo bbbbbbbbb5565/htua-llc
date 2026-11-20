@@ -1,6 +1,6 @@
 --[[
     ╔═══════════════════════════════════════════════════════════════╗
-    ║              CLL CHEAT - FULL INTEGRATION v11.8                ║
+    ║              CLL CHEAT - FULL INTEGRATION v11.10                ║
     ╠═══════════════════════════════════════════════════════════════╣
     ║  SUK head-hit, real crosshair, tracers, ESP outline nick,     ║
     ║  ChinaHat/Wings fix, VR hands, anti-flash/shake, antibypass   ║
@@ -1941,7 +1941,15 @@ RunService.RenderStepped:Connect(function()
 					end
 				end
 			end
-			if not visible and data then for _, obj in pairs(data) do if obj:IsA("GuiObject") then obj.Visible = false elseif obj:IsA("Highlight") then obj.Enabled = false end end end
+			if not visible and data then
+				for _, obj in pairs(data) do
+					if typeof(obj) == "Instance" then
+						if obj:IsA("GuiObject") then obj.Visible = false
+						elseif obj:IsA("Highlight") then obj.Enabled = false; pcall(function() obj:Destroy() end) end
+					end
+				end
+				data.Highlight = nil
+			end
 		end
 	end
 end)
@@ -1970,8 +1978,9 @@ local function applyHitboxTo(char)
 	local head = char:FindFirstChild("Head")
 	local hrp = char:FindFirstChild("HumanoidRootPart")
 	local hum = char:FindFirstChildOfClass("Humanoid")
-	if not head or not hrp or not hum then return end
-	if hum.Health <= 0 or not Hitbox_Config.Enabled then
+	if not head or not hrp then return end
+	-- dead / no humanoid: always restore so ForceField cubes don't stick
+	if not hum or hum.Health <= 0 or not Hitbox_Config.Enabled then
 		restoreHitbox(char, head, hrp)
 		return
 	end
@@ -2126,32 +2135,14 @@ do
 	pcall(function()
 		local oldIdx
 		oldIdx = hookmetamethod(game, "__index", function(self, key)
-			if key == "VREnabled" and ST.VREnabled then
-				local ok, cn = pcall(function()
-					return self == VRS or self.ClassName == "VRService"
-				end)
-				if ok and cn then
-					return true
-				end
+			if key == "VREnabled" and ST.VREnabled and self == VRS then
+				return true
 			end
 			return oldIdx(self, key)
 		end)
 	end)
-	pcall(function()
-		local mt = getrawmetatable(game)
-		if not mt then return end
-		local old = mt.__index
-		setreadonly(mt, false)
-		mt.__index = function(self, key)
-			if key == "VREnabled" and ST.VREnabled then
-				local ok, cn = pcall(function() return self.ClassName end)
-				if ok and cn == "VRService" then return true end
-			end
-			if typeof(old) == "function" then return old(self, key) end
-			return rawget(self, key)
-		end
-		setreadonly(mt, true)
-	end)
+	-- Do NOT replace game metatable.__index here.
+	-- rawget fallback made every Instance property nil → statue + broken FX on inject.
 	task.spawn(function()
 		while not ST.isUnloaded do
 			task.wait(0.5)
@@ -2191,20 +2182,13 @@ task.spawn(function()
 					if hum and hum.PlatformStand then
 						hum.PlatformStand = false
 					end
-					for _, d in ipairs(char:GetDescendants()) do
-						if d:IsA("BasePart") then
-							-- never keep limbs/root frozen outside special modes
-							if d.Anchored and d.Name ~= "HumanoidRootPart" then
-								d.Anchored = false
-							elseif d.Name == "HumanoidRootPart" and d.Anchored then
-								d.Anchored = false
-							end
-						elseif d:IsA("Motor6D") then
-							if not d.Enabled then
-								d.Enabled = true
-							end
+					for _, d in ipairs(char:GetChildren()) do
+						if d:IsA("BasePart") and d.Anchored then
+							d.Anchored = false
 						end
 					end
+					-- only motors we disabled for VR, not every Motor6D (that broke gun/FX anims)
+					if _G.CLL_vrRestore then pcall(_G.CLL_vrRestore) end
 				end)
 			end
 		end
@@ -2267,23 +2251,28 @@ local function vrRestoreShoulders()
 		end
 	end
 end
+_G.CLL_vrRestore = vrRestoreShoulders
 
 local function vrInitCharacter(char)
 	if not char then return end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if not hum or hum.Health <= 0 or not hrp then return end
 	pcall(function()
 		char:SetAttribute("DID_VR", true)
 		char:SetAttribute("VR", true)
-		char:SetAttribute("VR_HEAD_CFRAME", CFrame.new())
-		char:SetAttribute("VR_RIGHT_ARM_CFRAME", CFrame.new())
-		char:SetAttribute("VR_LEFT_ARM_CFRAME", CFrame.new())
-		char:SetAttribute("VR_ROOTPART_CFRAME", CFrame.new())
-		char:SetAttribute("VR_RIGHT_ARM_RECOIL", CFrame.new())
-		char:SetAttribute("VR_LEFT_ARM_RECOIL", CFrame.new())
-		char:SetAttribute("VR_RIGHT_ARM_OFFSET", CFrame.new())
+		-- relative identity, NEVER world-origin CFrame (that launches / kills)
+		local id = CFrame.new()
+		char:SetAttribute("VR_HEAD_CFRAME", hrp.CFrame)
+		char:SetAttribute("VR_RIGHT_ARM_CFRAME", hrp.CFrame)
+		char:SetAttribute("VR_LEFT_ARM_CFRAME", hrp.CFrame)
+		char:SetAttribute("VR_ROOTPART_CFRAME", hrp.CFrame)
+		char:SetAttribute("VR_RIGHT_ARM_RECOIL", id)
+		char:SetAttribute("VR_LEFT_ARM_RECOIL", id)
+		char:SetAttribute("VR_RIGHT_ARM_OFFSET", id)
 		char:SetAttribute("VR_CAMERA_RECOIL", Vector3.zero)
 	end)
 	vrDisableShoulders(char)
-	-- DO NOT set Head CollisionGroup ViewModel — causes random resets/deaths
 	if FxRemote then
 		pcall(function() FxRemote:FireServer("VR_INIT") end)
 	end
@@ -2371,7 +2360,18 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 	if not cam or not hum or not hrp or hum.Health <= 0 then
+		-- dead: stop VR packets (they re-kill / launch the next body)
+		vrDidInit = false
+		pcall(function()
+			hrp.AssemblyLinearVelocity = Vector3.zero
+			hrp.AssemblyAngularVelocity = Vector3.zero
+		end)
 		releaseVRCamera()
+		return
+	end
+
+	-- don't init in the first second of a life (spawn kill / fly-up)
+	if tick() - (char:GetAttribute("CLL_SpawnT") or 0) < 1.2 then
 		return
 	end
 
@@ -2430,25 +2430,27 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		leftHand = leftHand * CFrame.new(math.sin(vrHandShakeSeed + 2) * s, math.cos(vrHandShakeSeed + 2) * s, 0)
 	end
 
-		-- Forward punch along look direction (not backwards)
+		-- Palm slap: open hand faces look direction, sweep from the side (not a fist punch, not backwards)
 	if VRSwingActive then
 		local spd = ST.VRSwingSpeed or 14
 		local amp = ST.VRSwingAmp or 1.8
 		VRSwingPhase = VRSwingPhase + dt * spd
 		local tphase = math.clamp(VRSwingPhase / math.pi, 0, 1)
-		local swing = math.sin(tphase * math.pi) -- 0→1→0
-		local torsoRef = torsoCF or hrp.CFrame
+		local swing = math.sin(tphase * math.pi)
+		local torsoPos = (torsoCF or hrp.CFrame).Position
 		local lookFlat = Vector3.new(headCF.LookVector.X, 0, headCF.LookVector.Z)
 		if lookFlat.Magnitude < 0.05 then lookFlat = Vector3.new(0, 0, -1) else lookFlat = lookFlat.Unit end
-		local face = CFrame.lookAt(torsoRef.Position, torsoRef.Position + lookFlat)
 		local sideSign = VRSwingSide > 0 and 1 or -1
-		local shoulder = face * CFrame.new(sideSign * 1.05, 0.45, 0)
-		-- windup: hand slightly back; strike: extend forward along -Z of face
-		local back = (1 - swing) * 0.35
-		local forward = 0.5 + amp * swing
-		local handCF = shoulder
-			* CFrame.Angles(math.rad(-10 - 70 * swing), math.rad(sideSign * 8), math.rad(sideSign * 12 * swing))
-			* CFrame.new(0, -0.15, -forward + back)
+		local side = Vector3.new(-lookFlat.Z, 0, lookFlat.X) * sideSign
+		local shoulderPos = torsoPos + side * 1.05 + Vector3.new(0, 0.45, 0)
+		-- 0 = cocked to the side, 1 = palm in front along look
+		local reach = 1.15 + amp * swing
+		local mid = shoulderPos
+			+ lookFlat * reach * swing
+			+ side * (0.85 * (1 - swing))
+			+ Vector3.new(0, 0.25 * (1 - swing), 0)
+		-- -Z (palm) faces lookFlat; roll puts the arm horizontal like a slap
+		local handCF = CFrame.lookAt(mid, mid + lookFlat) * CFrame.Angles(0, 0, math.rad(90 * sideSign))
 		if sideSign > 0 then rightHand = handCF else leftHand = handCF end
 		if VRSwingPhase >= math.pi then
 			VRSwingActive = false
@@ -2503,15 +2505,20 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	end
 end)
 
-LocalPlayer.CharacterAdded:Connect(function()
+LocalPlayer.CharacterAdded:Connect(function(c)
 	vrDidInit = false
+	pcall(function() c:SetAttribute("CLL_SpawnT", tick()) end)
 	task.defer(function()
-		if ST.VREnabled then
-			task.wait(0.3)
-			local c = LocalPlayer.Character
-			if c and ST.VREnabled then vrInitCharacter(c) end
-		else
+		if not ST.VREnabled then
 			releaseVRCamera()
+			pcall(vrShutdown)
+			return
+		end
+		task.wait(1.2)
+		local live = LocalPlayer.Character
+		local hum = live and live:FindFirstChildOfClass("Humanoid")
+		if live == c and ST.VREnabled and hum and hum.Health > 0 then
+			vrInitCharacter(live)
 		end
 	end)
 end)
@@ -2993,7 +3000,7 @@ fit(); workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(
 local header = new("Frame", { Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Parent = window })
 local logoLabel = label({ Text = "CLL", Font = Enum.Font.Michroma, TextSize = 26, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.fromOffset(100, 62), Position = UDim2.fromOffset(23, 0), Parent = header })
 logoLabel.TextColor3 = Color3.fromRGB(255, 255, 255) -- Always white
-local verLabel = label({ Text = "v11.8", Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(50, 62), Position = UDim2.fromOffset(85, 2), Parent = header })
+local verLabel = label({ Text = "v11.10", Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(50, 62), Position = UDim2.fromOffset(85, 2), Parent = header })
 local timeLabel = label({ Text = "Session: 00:00", Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(150, 62), Position = UDim2.fromOffset(150, 0), Parent = header })
 task.spawn(function()
 	while not ST.isUnloaded do
