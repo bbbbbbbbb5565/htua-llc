@@ -1,6 +1,6 @@
 --[[
     ╔═══════════════════════════════════════════════════════════════╗
-    ║              CLL CHEAT - FULL INTEGRATION v11.3                ║
+    ║              CLL CHEAT - FULL INTEGRATION v11.4                ║
     ╠═══════════════════════════════════════════════════════════════╣
     ║  SUK head-hit, real crosshair, tracers, ESP outline nick,     ║
     ║  ChinaHat/Wings fix, VR hands, anti-flash/shake, antibypass   ║
@@ -101,54 +101,68 @@ local ST = {
 
 
 --// ==================== ANTI-BYPASS (hard gate: loader.lua only) ====================
--- Blocks: loadstring(HttpGet(main.lua)) without going through loader.
--- Loader MUST set BEFORE running this file:
---   getgenv().CLL_LOADED_FROM_LOADER = true
---   getgenv().CLL_LOADER_TOKEN = "CLL_LDR_v1"
---   getgenv().CLL_Auth = { status = "valid", CLL_AUTH_OK = true, ... }
+-- Compatible with current htua-llc loader which sets:
+--   _G.CLL_LOADED_BY_LOADER = true
+--   _G.CLL_Auth = { status = "valid", ... }
+--   _G.CLL_SESSION = { ok = true, ... }
+-- Direct loadstring(main.lua) without these flags is blocked.
 do
 	local env = _G
 	pcall(function()
 		if getgenv then env = getgenv() end
 	end)
 
-	local EXPECTED_TOKEN = "CLL_LDR_v1"
 	local fromLoader = false
-	local tokenOk = false
 	local authOk = false
-	local reason = "not loaded via loader.lua"
+	local sessionOk = false
 
 	pcall(function()
-		fromLoader = env.CLL_LOADED_FROM_LOADER == true
-		tokenOk = (env.CLL_LOADER_TOKEN == EXPECTED_TOKEN)
+		-- accept BOTH flag names (old gate used FROM, real loader uses BY)
+		fromLoader = (env.CLL_LOADED_BY_LOADER == true)
+			or (env.CLL_LOADED_FROM_LOADER == true)
+			or (rawget(_G, "CLL_LOADED_BY_LOADER") == true)
+			or (rawget(_G, "CLL_LOADED_FROM_LOADER") == true)
+
 		local auth = env.CLL_Auth or rawget(_G, "CLL_Auth")
 		if type(auth) == "table" then
-			local st = tostring(auth.status or "")
-			authOk = (st == "valid" or st == "ok") and (auth.CLL_AUTH_OK ~= false)
+			local st = string.lower(tostring(auth.status or ""))
+			authOk = (st == "valid" or st == "ok")
+		end
+
+		local sess = env.CLL_SESSION or rawget(_G, "CLL_SESSION")
+		if type(sess) == "table" and sess.ok == true then
+			sessionOk = true
 		end
 	end)
 
-	local allowed = fromLoader and tokenOk and authOk
+	-- need loader flag + (valid auth OR session.ok)
+	local allowed = fromLoader and (authOk or sessionOk)
 
 	_G.CLL_ANTIBYPASS = {
 		ok = allowed,
+		fromLoader = fromLoader,
+		authOk = authOk,
+		sessionOk = sessionOk,
 		check = function()
 			if not fromLoader then return false, "loader flag missing (main.lua direct load)" end
-			if not tokenOk then return false, "loader token mismatch" end
-			if not authOk then return false, "auth missing/invalid" end
+			if not (authOk or sessionOk) then return false, "auth/session missing" end
 			return true
 		end,
 	}
 
 	if not allowed then
 		warn("[CLL] blocked: run via loader.lua + valid key (direct main.lua loadstring denied)")
-		-- hard stop this chunk — no UI, no hooks
+		warn("[CLL] debug: fromLoader=", tostring(fromLoader), "authOk=", tostring(authOk), "sessionOk=", tostring(sessionOk))
 		return
 	end
 
-	-- one-shot token: can't reuse after first successful main load without loader re-setting it
+	-- optional one-shot: clear BY flag so a second naked main load fails
+	-- (loader always re-sets it before each legitimate load)
 	pcall(function()
-		env.CLL_LOADER_TOKEN = nil
+		env.CLL_LOADED_BY_LOADER = nil
+		env.CLL_LOADED_FROM_LOADER = nil
+		rawset(_G, "CLL_LOADED_BY_LOADER", nil)
+		rawset(_G, "CLL_LOADED_FROM_LOADER", nil)
 	end)
 end
 
@@ -2085,6 +2099,10 @@ end
 
 local VR_Cam_Rotation = CFrame.new()
 local vrHandShakeSeed = 0
+local VRSwingPhase = 0
+local VRSwingActive = false
+local VRSwingSide = 1 -- 1 right, -1 left
+
 local vrDidInit = false
 local vrLastUpdate = 0
 local vrShoulders = {} -- Motor6D refs to re-enable on exit
@@ -2186,6 +2204,19 @@ local function vrShutdown()
 	end)
 end
 
+
+-- VR LMB punch swing
+UIS.InputBegan:Connect(function(input, gp)
+	if gp or ST.isUnloaded or not ST.VREnabled then return end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		if not VRSwingActive then
+			VRSwingActive = true
+			VRSwingPhase = 0
+			VRSwingSide = (VRSwingSide or 1) * -1 -- alternate hands
+		end
+	end
+end)
+
 UIS.InputChanged:Connect(function(input)
 	if not ST.VREnabled then return end
 	if input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
@@ -2230,9 +2261,20 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		headCF = cam.CFrame
 	end
 
-	local reach = math.clamp(ST.VRHandExtend or 0, 0, 100)
-	local rightHand = headCF * CFrame.new(0.7, -0.5, -0.8 - reach)
-	local leftHand = headCF * CFrame.new(-0.7, -0.5, -0.8 - reach)
+	-- hands at TORSO height (not hanging from head), slight forward
+	local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso") or hrp
+	local torsoCF = torso and torso.CFrame or hrp.CFrame
+	local reach = math.clamp(ST.VRHandExtend or 0, 0, 100) * 0.05 -- scale extend
+	local rightHand = torsoCF * CFrame.new(1.1 + reach, 0.15, -0.6)
+	local leftHand = torsoCF * CFrame.new(-1.1 - reach, 0.15, -0.6)
+	-- still face roughly camera yaw
+	local look = headCF.LookVector
+	local flat = Vector3.new(look.X, 0, look.Z)
+	if flat.Magnitude > 0.05 then
+		local face = CFrame.lookAt(torsoCF.Position, torsoCF.Position + flat.Unit)
+		rightHand = face * CFrame.new(1.1 + reach, 0.15, -0.6)
+		leftHand = face * CFrame.new(-1.1 - reach, 0.15, -0.6)
+	end
 
 	-- VR target: body + hands to selected players (slightly above head so hits register)
 	local vrTargets = (ST.VRTargetEnabled and GetVRTargets and GetVRTargets()) or {}
@@ -2255,6 +2297,39 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		local s = (ST.VRShakeIntensity or 0.5) * ((#vrTargets > 0) and 1.6 or 1)
 		rightHand = rightHand * CFrame.new(math.sin(vrHandShakeSeed) * s, math.cos(vrHandShakeSeed * 1.3) * s, 0)
 		leftHand = leftHand * CFrame.new(math.sin(vrHandShakeSeed + 2) * s, math.cos(vrHandShakeSeed + 2) * s, 0)
+	end
+
+	-- LMB swing punch (registers melee if hand passes through target)
+	if VRSwingActive then
+		VRSwingPhase = VRSwingPhase + dt * 14 -- speed
+		local a = math.sin(math.clamp(VRSwingPhase, 0, math.pi)) -- 0..1..0
+		local amp = 1.8
+		local forward = (headCF.LookVector * Vector3.new(1, 0, 1))
+		if forward.Magnitude < 0.05 then forward = Vector3.new(0, 0, -1) else forward = forward.Unit end
+		local side = Vector3.new(-forward.Z, 0, forward.X) * VRSwingSide
+		local punch = forward * (amp * a) + side * (0.35 * a) + Vector3.new(0, 0.2 * a, 0)
+		if VRSwingSide > 0 then
+			rightHand = rightHand + punch
+			rightHand = rightHand * CFrame.Angles(math.rad(-50 * a), 0, math.rad(25 * a))
+		else
+			leftHand = leftHand + punch
+			leftHand = leftHand * CFrame.Angles(math.rad(-50 * a), 0, math.rad(-25 * a))
+		end
+		if VRSwingPhase >= math.pi then
+			VRSwingActive = false
+			VRSwingPhase = 0
+			-- fire melee remote if exists
+			pcall(function()
+				if FxRemote then FxRemote:FireServer("Swing") end
+				local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+				if remotes then
+					local sw = remotes:FindFirstChild("Swing") or remotes:FindFirstChild("Melee")
+					if sw and sw:IsA("RemoteEvent") then
+						sw:FireServer("Swing")
+					end
+				end
+			end)
+		end
 	end
 
 	-- dump VR_INIT Tracked mode: anchor limbs and set CFrame relative to HRP attrs
@@ -2783,7 +2858,7 @@ fit(); workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(
 local header = new("Frame", { Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, Parent = window })
 local logoLabel = label({ Text = "CLL", Font = Enum.Font.Michroma, TextSize = 26, TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.fromOffset(100, 62), Position = UDim2.fromOffset(23, 0), Parent = header })
 logoLabel.TextColor3 = Color3.fromRGB(255, 255, 255) -- Always white
-local verLabel = label({ Text = "v11.3", Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(50, 62), Position = UDim2.fromOffset(85, 2), Parent = header })
+local verLabel = label({ Text = "v11.4", Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(50, 62), Position = UDim2.fromOffset(85, 2), Parent = header })
 local timeLabel = label({ Text = "Session: 00:00", Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(150, 62), Position = UDim2.fromOffset(150, 0), Parent = header })
 task.spawn(function()
 	while not ST.isUnloaded do
