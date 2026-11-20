@@ -245,7 +245,13 @@ local function LoadMainScript()
 	local ok, err = pcall(function()
 		local src = game:HttpGet(MAIN_SCRIPT_URL)
 		assert(type(src) == "string" and #src > 50, "empty main")
-		loadstring(src)()
+		_G.CLL_LOADED_BY_LOADER = true
+		_G.CLL_SESSION = {
+				ok = true,
+				ts = tick(),
+				auth = _G.CLL_Auth,
+	}
+	loadstring(src)()
 	end)
 	if not ok then
 		warn("[CLL] Failed to load main:", err)
