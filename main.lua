@@ -738,24 +738,24 @@ function CreateSparks(origin, dir, color)
 	if not ST.SparksEnabled then return end
 	if typeof(origin) ~= "Vector3" then return end
 	color = color or ST.ColorSelf
+	local white = Color3.new(1, 1, 1)
 	dir = typeof(dir) == "Vector3" and dir.Magnitude > 0.01 and dir.Unit or Vector3.new(0, 0, -1)
 	local dur = math.clamp(ST.TracerDuration or 0.5, 0.05, 3)
 	local folder = tracerFolder
 	if not folder then return end
-	-- ~60 short shards near muzzle (not full-distance tracers)
-	local count = 60
-	local maxDist = 4.5
-	for n = 1, count do
-		local side = Vector3.new(
-			(math.random() - 0.5) * 2.2,
-			(math.random() - 0.5) * 2.2,
-			(math.random() - 0.5) * 2.2
-		)
-		local along = dir * (math.random() * maxDist)
-		local pos = origin + along * 0.35 + side * 0.15
-		local tip = origin + along + side * 0.55
-		local dist = (tip - pos).Magnitude
-		if dist < 0.08 then dist = 0.08 end
+	local right = dir:Cross(Vector3.new(0, 1, 0))
+	if right.Magnitude < 0.05 then right = dir:Cross(Vector3.new(1, 0, 0)) end
+	right = right.Unit
+	local up = right:Cross(dir).Unit
+	for n = 1, 60 do
+		local col = (n % 3 == 0) and white or color
+		local spread = (right * ((math.random() - 0.5) * 1.4) + up * ((math.random() - 0.5) * 1.4))
+		local speed = 6 + math.random() * 14
+		local along = dir * (0.15 + math.random() * 2.8) + spread * (0.2 + math.random() * 0.9)
+		local pos0 = origin + dir * 0.1
+		local pos1 = origin + along
+		local dist = (pos1 - pos0).Magnitude
+		if dist < 0.06 then dist = 0.06 end
 		local part = Instance.new("Part")
 		part.Name = "CLL_Spark"
 		part.Anchored = true
@@ -764,20 +764,20 @@ function CreateSparks(origin, dir, color)
 		part.CanTouch = false
 		part.CastShadow = false
 		part.Material = Enum.Material.Neon
-		part.Color = color
-		part.Transparency = 0.05 + math.random() * 0.25
-		part.Size = Vector3.new(0.04 + math.random() * 0.05, 0.04 + math.random() * 0.05, dist)
-		part.CFrame = CFrame.lookAt(pos, tip) * CFrame.new(0, 0, -dist / 2)
+		part.Color = col
+		part.Transparency = 0.05
+		part.Size = Vector3.new(0.05, 0.05, dist)
+		part.CFrame = CFrame.lookAt(pos0, pos1) * CFrame.new(0, 0, -dist / 2)
 		part.Parent = folder
-		local life = dur * (0.45 + math.random() * 0.55)
-		task.delay(life * 0.15, function()
-			if not part.Parent then return end
-			pcall(function()
-				TweenService:Create(part, TweenInfo.new(life * 0.85, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-					Transparency = 1,
-					Size = Vector3.new(0.02, 0.02, dist * 0.3),
-				}):Play()
-			end)
+		local life = dur * (0.35 + math.random() * 0.65)
+		-- fly outward a bit
+		local endPos = pos1 + along.Unit * (1 + math.random() * 2)
+		pcall(function()
+			TweenService:Create(part, TweenInfo.new(life, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				CFrame = CFrame.lookAt(pos0:Lerp(endPos, 0.7), endPos) * CFrame.new(0, 0, -dist * 0.2),
+				Transparency = 1,
+				Size = Vector3.new(0.02, 0.02, dist * 0.25),
+			}):Play()
 		end)
 		task.delay(life + 0.05, function()
 			if part then part:Destroy() end
@@ -2408,10 +2408,12 @@ UIS.InputChanged:Connect(function(input)
 		* CFrame.Angles(math.rad(-d.Y * 0.35), 0, 0)
 end)
 
--- VR punch: dump path is ONLY Grabmove + arm (Kick = leg kick, skip it)
+-- VR swing: visual palm slap + Grabmove at end of swing (dump VR LMB path)
 local VRSwingSide = 1
+local VRSwingActive = false
+local VRSwingPhase = 0
 UIS.InputBegan:Connect(function(input, gp)
-	if gp or ST.isUnloaded or not ST.VREnabled then return end
+	if ST.isUnloaded or not ST.VREnabled then return end
 	local bind = Keys.VRSwing or Enum.UserInputType.MouseButton1
 	local hit = false
 	if typeof(bind) == "EnumItem" then
@@ -2419,13 +2421,10 @@ UIS.InputBegan:Connect(function(input, gp)
 		if bind.EnumType == Enum.KeyCode and input.KeyCode == bind then hit = true end
 	end
 	if not hit then return end
+	if VRSwingActive then return end
 	VRSwingSide = (VRSwingSide or 1) * -1
-	local arm = VRSwingSide > 0 and "RIGHT_ARM" or "LEFT_ARM"
-	pcall(function()
-		if SwingRemote then
-			SwingRemote:FireServer("Grabmove", arm)
-		end
-	end)
+	VRSwingActive = true
+	VRSwingPhase = 0
 end)
 
 RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, function(dt)
@@ -2436,18 +2435,38 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 	local cam = workspace.CurrentCamera
 
-	local dead = (not ST.VREnabled)
-		or (not char) or (not hum) or (not hrp)
-		or (hum.Health <= 0)
-		or char:GetAttribute("Ragdoll")
-		or char:GetAttribute("Downed")
-		or hum.PlatformStand
+	-- dump: VR camera/body path only runs when NOT Ragdoll; Stunned pins cam to Head
+	local function vrBlocked()
+		if not ST.VREnabled then return true end
+		if not char or not hum or not hrp then return true end
+		if hum.Health <= 0 then return true end
+		if hum.PlatformStand then return true end
+		local stOk, st = pcall(function() return hum:GetState() end)
+		if stOk and (st == Enum.HumanoidStateType.Dead or st == Enum.HumanoidStateType.Physics) then
+			return true
+		end
+		-- truthy ragdoll/downed (dump uses GetAttribute("Ragdoll"))
+		local r = char:GetAttribute("Ragdoll")
+		if r == true or r == 1 or r == "true" then return true end
+		local d = char:GetAttribute("Downed")
+		if d == true or d == 1 then return true end
+		return false
+	end
 
-	-- dead / ragdoll / VR off → fully disable VR, restore body
-	if dead then
+	if vrBlocked() then
+		-- HARD off: stop packets, unanchor, clear DID_VR (dump stops tracked path on ragdoll)
 		if vrDidInit or (char and char:GetAttribute("DID_VR")) then
 			pcall(vrShutdown)
+		else
+			pcall(function()
+				if char then
+					char:SetAttribute("DID_VR", false)
+					char:SetAttribute("VR", false)
+				end
+				vrForceUnanchor(char)
+			end)
 		end
+		vrDidInit = false
 		return
 	end
 
@@ -2465,20 +2484,11 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	local looking = UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
 	UIS.MouseIconEnabled = not looking
 
-	-- FOV-lock style camera: first person, no Scriptable fly
 	pcall(function()
-		LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
 		hum.CameraOffset = Vector3.zero
 		char:SetAttribute("VR_CAMERA_RECOIL", Vector3.zero)
 	end)
-	if cam then
-		if cam.CameraType ~= Enum.CameraType.Custom then
-			cam.CameraType = Enum.CameraType.Custom
-		end
-		cam.CameraSubject = hum
-	end
 
-	-- TORSO-based hands (11.10 ref math): extend/height/width work from body
 	local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso") or hrp
 	local torsoCF = torso.CFrame
 	local headPart = char:FindFirstChild("Head")
@@ -2486,11 +2496,22 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 
 	local headCF
 	if looking then
+		-- real free-look (dump uses headset CFrame → we use mouse yaw/pitch on body)
 		headCF = CFrame.new(headPos) * VR_Cam_Rotation
+		if cam then
+			cam.CameraType = Enum.CameraType.Scriptable
+			cam.CFrame = headCF
+		end
 	else
 		local yaw = select(2, hrp.CFrame:ToOrientation())
 		headCF = CFrame.new(headPos) * CFrame.Angles(0, yaw, 0)
 		VR_Cam_Rotation = CFrame.Angles(0, yaw, 0)
+		if cam then
+			if cam.CameraType == Enum.CameraType.Scriptable then
+				cam.CameraType = Enum.CameraType.Custom
+				cam.CameraSubject = hum
+			end
+		end
 	end
 
 	local reach = math.clamp(ST.VRHandExtend or 0, 0, 10)
@@ -2527,6 +2548,38 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		local s = (ST.VRShakeIntensity or 0.5) * 0.5
 		rightHand = rightHand * CFrame.new(math.sin(vrHandShakeSeed) * s, math.cos(vrHandShakeSeed * 1.3) * s, 0)
 		leftHand = leftHand * CFrame.new(math.sin(vrHandShakeSeed + 2) * s, math.cos(vrHandShakeSeed + 2) * s, 0)
+	end
+
+	-- Palm slap animation (11.10): arm sweeps, then FireServer Grabmove once
+	if VRSwingActive then
+		local spd = ST.VRSwingSpeed or 14
+		local amp = ST.VRSwingAmp or 1.8
+		VRSwingPhase = VRSwingPhase + dt * spd
+		local tphase = math.clamp(VRSwingPhase / math.pi, 0, 1)
+		local swing = math.sin(tphase * math.pi)
+		local torsoPos = torsoCF.Position
+		local lookFlat = Vector3.new(headCF.LookVector.X, 0, headCF.LookVector.Z)
+		if lookFlat.Magnitude < 0.05 then lookFlat = Vector3.new(0, 0, -1) else lookFlat = lookFlat.Unit end
+		local sideSign = VRSwingSide > 0 and 1 or -1
+		local side = Vector3.new(-lookFlat.Z, 0, lookFlat.X) * sideSign
+		local shoulderPos = torsoPos + side * (handW or 1.05) + Vector3.new(0, 0.45 + (handH or 0.2), 0)
+		local reachS = 1.15 + amp * swing
+		local mid = shoulderPos
+			+ lookFlat * reachS * swing
+			+ side * (0.85 * (1 - swing))
+			+ Vector3.new(0, 0.25 * (1 - swing), 0)
+		local handCF = CFrame.lookAt(mid, mid + lookFlat) * CFrame.Angles(0, 0, math.rad(90 * sideSign))
+		if sideSign > 0 then rightHand = handCF else leftHand = handCF end
+		if VRSwingPhase >= math.pi then
+			VRSwingActive = false
+			VRSwingPhase = 0
+			local arm = sideSign > 0 and "RIGHT_ARM" or "LEFT_ARM"
+			pcall(function()
+				if SwingRemote then
+					SwingRemote:FireServer("Grabmove", arm)
+				end
+			end)
+		end
 	end
 
 	-- drive ARMS only (never Head)
