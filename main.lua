@@ -1201,7 +1201,8 @@ local function MultiFireAt()
 	if dir.Magnitude < 0.05 then return end
 	dir = dir.Unit
 
-	-- dump Spas: one server Fire, then 8 client pellets with spread
+	-- dump Spas: server Fire once (damage), 8 Helper pellets for FX
+	-- aim every pellet at head so SUK registers
 	local payload = {
 		velocity = 2000,
 		bullet = bulletModel,
@@ -1211,9 +1212,28 @@ local function MultiFireAt()
 	pcall(function()
 		FireRemote:FireServer(tool, "Fire", payload)
 	end)
+	-- extra server fires with tight spread around head for multi-hit register
+	for _ = 1, 3 do
+		local jitter = Vector3.new(
+			(math.random() - 0.5) * 0.15,
+			(math.random() - 0.5) * 0.15,
+			(math.random() - 0.5) * 0.15
+		)
+		local d2 = (aimPos + jitter - origin)
+		if d2.Magnitude > 0.05 then
+			local p2 = {
+				velocity = 2000,
+				bullet = bulletModel,
+				origin = origin,
+				direction = d2.Unit,
+			}
+			pcall(function()
+				FireRemote:FireServer(tool, "Fire", p2)
+			end)
+		end
+	end
 	markLocalShot(origin)
 
-	-- 8 client pellets (visual + any local listeners), same as dump u35 spread
 	local function pelletDir(baseDir, minDeg, maxDeg)
 		local base = CFrame.new(Vector3.new(), baseDir)
 		local roll = CFrame.fromOrientation(0, 0, math.random() * math.pi * 2)
@@ -1225,7 +1245,7 @@ local function MultiFireAt()
 			velocity = 2000,
 			bullet = bulletModel,
 			origin = origin,
-			direction = pelletDir(dir, -7, 7),
+			direction = dir, -- pin to head aim, not random spray (damage path)
 		}
 		HelperFire("Fx", "Fire Bullet", tool, p)
 	end
@@ -2210,7 +2230,8 @@ local function vrDisableShoulders(char)
 	vrShoulders = {}
 	local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
 	if not torso then return end
-	for _, name in ipairs({"Right Shoulder", "Left Shoulder", "RightShoulder", "LeftShoulder", "Neck"}) do
+	-- Neck stays Enabled so head does not detach/fall
+	for _, name in ipairs({"Right Shoulder", "Left Shoulder", "RightShoulder", "LeftShoulder"}) do
 		local m = torso:FindFirstChild(name)
 		if m and m:IsA("Motor6D") then
 			vrShoulders[#vrShoulders + 1] = m
@@ -2283,6 +2304,26 @@ UIS.InputChanged:Connect(function(input)
 		* CFrame.Angles(math.rad(-d.Y * 0.35), 0, 0)
 end)
 
+-- VR punch: LMB (or Keys.VRSwing) fires real swing remotes
+local VRSwingSide = 1
+UIS.InputBegan:Connect(function(input, gp)
+	if gp or ST.isUnloaded or not ST.VREnabled then return end
+	local bind = Keys.VRSwing or Enum.UserInputType.MouseButton1
+	local hit = false
+	if typeof(bind) == "EnumItem" then
+		if bind.EnumType == Enum.UserInputType and input.UserInputType == bind then hit = true end
+		if bind.EnumType == Enum.KeyCode and input.KeyCode == bind then hit = true end
+	end
+	if not hit then return end
+	VRSwingSide = (VRSwingSide or 1) * -1
+	local arm = VRSwingSide > 0 and "RIGHT_ARM" or "LEFT_ARM"
+	pcall(function()
+		if not SwingRemote then return end
+		SwingRemote:FireServer("Kick")
+		SwingRemote:FireServer("Grabmove", arm)
+	end)
+end)
+
 RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, function(dt)
 	if ST.isUnloaded or not ST.VREnabled then
 		return
@@ -2317,9 +2358,12 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		headCF = cam.CFrame
 	end
 
-	local reach = math.clamp(ST.VRHandExtend or 0, 0, 100)
-	local rightHand = headCF * CFrame.new(0.7, -0.5, -0.8 - reach)
-	local leftHand = headCF * CFrame.new(-0.7, -0.5, -0.8 - reach)
+	-- new-version hand placement (width / height / extend from ST)
+	local reach = math.clamp(ST.VRHandExtend or 1.2, 0, 12)
+	local handH = ST.VRHandHeight or 0.2
+	local handW = math.clamp(ST.VRHandWidth or 1.05, 0.3, 3)
+	local rightHand = headCF * CFrame.new(handW, -0.5 + handH, -0.8 - reach)
+	local leftHand = headCF * CFrame.new(-handW, -0.5 + handH, -0.8 - reach)
 
 	-- optional target punch (hand teleport + shake)
 	local vrTargets = GetVRTargets and GetVRTargets() or {}
@@ -2336,7 +2380,7 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		leftHand = leftHand * CFrame.new(math.sin(vrHandShakeSeed + 2) * s, math.cos(vrHandShakeSeed + 2) * s, 0)
 	end
 
-	-- dump VR_INIT Tracked mode: anchor limbs and set CFrame relative to HRP attrs
+	-- Arms only: anchor + CFrame. Head NEVER anchored (prevents head drop).
 	local function driveLimb(name, worldCF)
 		local limb = char:FindFirstChild(name)
 		if not limb or not limb:IsA("BasePart") then return end
@@ -2348,7 +2392,11 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	end
 	driveLimb("Right Arm", rightHand)
 	driveLimb("Left Arm", leftHand)
-	driveLimb("Head", headCF)
+	-- keep head free so Neck motor / anims / FX stay alive
+	local headPart = char:FindFirstChild("Head")
+	if headPart and headPart:IsA("BasePart") and headPart.Anchored then
+		headPart.Anchored = false
+	end
 
 	-- attributes the game reads
 	pcall(function()
@@ -4187,12 +4235,7 @@ buildFeaturePage(pages.Effects, "EFFECTS", {
 	end },
 
 	{ name = "China Hat", initial = false, onToggle = function(v) ST.ChinaHatEnabled = v; pcall(function() Cosmetics.setHat(v) end) end, buildDetail = nil },
-	{ name = "Custom Wings", initial = false, onToggle = function(v) ST.WingsEnabled = v; pcall(function() Cosmetics.setWings(v) end) end, buildDetail = function(d) 
-		local btn = new("TextButton", { Text = "Normal", Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = Theme.Text, Size = UDim2.new(1, -16, 0, 32), BackgroundColor3 = Theme.Row, LayoutOrder = 1, Parent = d }, { corner(8), stroke() })
-		-- wing type locked to Normal (Bacon removed)
-			btn.Text = "Normal"
-			btn.Active = false
-	end },
+	{ name = "Custom Wings", initial = false, onToggle = function(v) ST.WingsEnabled = v; pcall(function() Cosmetics.setWings(v) end) end, buildDetail = nil },
 	{ name = "Anti-Lag", initial = false, onToggle = function(s) ST.AntiLagEnabled = s; if s then CleanDebris() end end, buildDetail = nil },
 		{ name = "Remove Rain/Weather", initial = false, onToggle = function(s)
 		pcall(function()
