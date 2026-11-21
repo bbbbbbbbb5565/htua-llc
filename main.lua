@@ -1700,6 +1700,39 @@ RunService.Heartbeat:Connect(function()
 		end
 		if humanoid.WalkSpeed < 16 and not ST.WalkSpeedEnabled then humanoid.WalkSpeed = 16 end
 	end
+	-- idle safety: if VR/Fly/Invis off, never leave arms anchored or HRP locked
+	if not ST.VREnabled and not ST.FlyEnabled and not ST.LocalInvisEnabled then
+		pcall(function()
+			if root.Anchored then root.Anchored = false end
+			for _, n in ipairs({"Right Arm", "Left Arm", "Head"}) do
+				local p = char:FindFirstChild(n)
+				if p and p:IsA("BasePart") and p.Anchored then
+					p.Anchored = false
+				end
+			end
+			-- restore shoulders if left disabled by a half-dead VR session
+			local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+			if torso then
+				for _, n in ipairs({"Right Shoulder", "Left Shoulder", "RightShoulder", "LeftShoulder"}) do
+					local m = torso:FindFirstChild(n)
+					if m and m:IsA("Motor6D") and m.Enabled == false then
+						m.Enabled = true
+					end
+				end
+			end
+			-- strip leftover movers from our cheats
+			for _, inst in ipairs(root:GetChildren()) do
+				if inst:IsA("BodyVelocity") or inst:IsA("BodyGyro") or inst:IsA("BodyPosition") then
+					if inst.Name:find("CLL") or inst == flyVelocity or inst == flyGyro then
+						inst:Destroy()
+					end
+				end
+			end
+			if not ST.WalkSpeedEnabled and humanoid.WalkSpeed > 0 and humanoid.WalkSpeed < 14 then
+				humanoid.WalkSpeed = 16
+			end
+		end)
+	end
 	if ST.NoRecoilEnabled then
 		pcall(function()
 			for _, tr in ipairs(humanoid:GetPlayingAnimationTracks()) do
@@ -3730,7 +3763,7 @@ local function buildSettings()
 	toggle(leftScroll, y, "Watermark Main", function(v) ST.WatermarkMainVisible = v; watermarkMain.Visible = v end, true); y += 48
 	toggle(leftScroll, y, "Watermark Binds", function(v) ST.WatermarkBindsVisible = v; watermarkBinds.Visible = v end, true); y += 48
 	toggle(leftScroll, y, "Watermark World", function(v) ST.WatermarkWorldVisible = v; watermarkWorld.Visible = v end, true); y += 48
-	toggle(leftScroll, y, "Watermark Ammo", function(v) ST.WatermarkAmmoVisible = v; if ammoLbl then ammoLbl.Visible = v and lastClientAmmo ~= nil end end, true); y += 64
+	toggle(leftScroll, y, "Watermark Ammo", function(v) ST.WatermarkAmmoVisible = v; if ammoLbl then ammoLbl.Visible = v end end, true); y += 64
 	
 	local animLbl = label({ Text = "UI Animation: " .. tostring(AnimName), TextSize = 13, Size = UDim2.new(1, -40, 0, 20), Position = UDim2.fromOffset(PAD, y), Parent = leftScroll }); y += 25
 	local animBtn = new("TextButton", { Text = "Cycle preset", Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = Theme.Text, Size = UDim2.fromOffset(120, 28), Position = UDim2.fromOffset(PAD, y), BackgroundColor3 = Theme.Row, AutoButtonColor = false, Parent = leftScroll }, { corner(8), stroke() }); y += 48
@@ -4531,6 +4564,118 @@ do
 	UIS.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
 end
 
+
+-- Ammo watermark (under cursor) — ClientAmmo of last held gun
+ST.WatermarkAmmoVisible = ST.WatermarkAmmoVisible ~= false
+local ammoGui = Instance.new("ScreenGui")
+ammoGui.Name = "CLL_AmmoWM"
+ammoGui.ResetOnSpawn = false
+ammoGui.IgnoreGuiInset = true
+ammoGui.DisplayOrder = 999
+ammoGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+pcall(function()
+	if gethui then ammoGui.Parent = gethui() end
+end)
+if not ammoGui.Parent then
+	pcall(function() ammoGui.Parent = game:GetService("CoreGui") end)
+end
+if not ammoGui.Parent then
+	pcall(function() ammoGui.Parent = LocalPlayer:FindFirstChild("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 2) end)
+end
+local ammoLbl = Instance.new("TextLabel")
+ammoLbl.Name = "Ammo"
+ammoLbl.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+ammoLbl.BackgroundTransparency = 0.35
+ammoLbl.BorderSizePixel = 0
+ammoLbl.Size = UDim2.fromOffset(90, 24)
+ammoLbl.AnchorPoint = Vector2.new(0.5, 0)
+ammoLbl.Font = Enum.Font.GothamBold
+ammoLbl.TextSize = 15
+ammoLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+ammoLbl.TextStrokeTransparency = 0.5
+ammoLbl.Text = "— / —"
+ammoLbl.Visible = ST.WatermarkAmmoVisible
+ammoLbl.Parent = ammoGui
+do
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, 6)
+	c.Parent = ammoLbl
+end
+local lastHeldTool = nil
+local lastClientAmmo, lastMaxAmmo = nil, nil
+
+local function refreshAmmoLabel()
+	if not ST.WatermarkAmmoVisible then
+		ammoLbl.Visible = false
+		return
+	end
+	ammoLbl.Visible = true
+	if lastClientAmmo ~= nil then
+		ammoLbl.Text = string.format("%d / %d", lastClientAmmo, lastMaxAmmo or 0)
+	else
+		ammoLbl.Text = "— / —"
+	end
+end
+
+local function trackToolAmmo(tool)
+	if not tool or not tool:IsA("Tool") then return end
+	lastHeldTool = tool
+	local function read()
+		if not tool or not tool.Parent then return end
+		local cur = tool:GetAttribute("ClientAmmo")
+		if cur == nil then cur = tool:GetAttribute("CurrentAmmo") end
+		if cur == nil then
+			local v = tool:FindFirstChild("CurrentAmmo")
+			if v and (v:IsA("IntValue") or v:IsA("NumberValue")) then cur = v.Value end
+		end
+		local maxA = tool:GetAttribute("MaxAmmo")
+		if maxA == nil then
+			local v = tool:FindFirstChild("MaxAmmo")
+			if v and (v:IsA("IntValue") or v:IsA("NumberValue")) then maxA = v.Value end
+		end
+		lastClientAmmo = tonumber(cur)
+		lastMaxAmmo = tonumber(maxA) or lastMaxAmmo
+		refreshAmmoLabel()
+	end
+	read()
+	pcall(function()
+		tool:GetAttributeChangedSignal("ClientAmmo"):Connect(read)
+		tool:GetAttributeChangedSignal("CurrentAmmo"):Connect(read)
+		tool:GetAttributeChangedSignal("MaxAmmo"):Connect(read)
+	end)
+	pcall(function()
+		local v = tool:FindFirstChild("CurrentAmmo")
+		if v and (v:IsA("IntValue") or v:IsA("NumberValue")) then
+			v.Changed:Connect(read)
+		end
+	end)
+end
+
+local function hookCharTools(char)
+	if not char then return end
+	char.ChildAdded:Connect(function(ch)
+		if ch:IsA("Tool") then trackToolAmmo(ch) end
+	end)
+	char.ChildRemoved:Connect(function(ch)
+		if ch:IsA("Tool") and ch == lastHeldTool then
+			-- keep last ammo numbers displayed
+			refreshAmmoLabel()
+		end
+	end)
+	local t = char:FindFirstChildOfClass("Tool")
+	if t then trackToolAmmo(t) end
+end
+if LocalPlayer.Character then hookCharTools(LocalPlayer.Character) end
+LocalPlayer.CharacterAdded:Connect(hookCharTools)
+
+RunService.RenderStepped:Connect(function()
+	if ST.isUnloaded then return end
+	refreshAmmoLabel()
+	if not ammoLbl.Visible then return end
+	local m = UIS:GetMouseLocation()
+	ammoLbl.Position = UDim2.fromOffset(m.X, m.Y + 26)
+end)
+
 task.spawn(function()
 	local frames, acc = 0, 0
 	RunService.RenderStepped:Connect(function(dt)
@@ -4570,80 +4715,6 @@ task.spawn(function()
 	end)
 end)
 
-
--- Ammo readout under cursor (ClientAmmo of last held tool)
-local ammoGui = Instance.new("ScreenGui")
-ammoGui.Name = "CLL_AmmoWM"
-ammoGui.ResetOnSpawn = false
-ammoGui.IgnoreGuiInset = true
-ammoGui.DisplayOrder = 100
-pcall(function()
-	ammoGui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
-end)
-if not ammoGui.Parent then ammoGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
-local ammoLbl = Instance.new("TextLabel")
-ammoLbl.Name = "Ammo"
-ammoLbl.BackgroundTransparency = 1
-ammoLbl.Size = UDim2.fromOffset(120, 22)
-ammoLbl.AnchorPoint = Vector2.new(0.5, 0)
-ammoLbl.Position = UDim2.fromOffset(0, 0)
-ammoLbl.Font = Enum.Font.GothamBold
-ammoLbl.TextSize = 16
-ammoLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
-ammoLbl.TextStrokeTransparency = 0.4
-ammoLbl.TextStrokeColor3 = Color3.new(0, 0, 0)
-ammoLbl.Text = ""
-ammoLbl.Visible = false
-ammoLbl.Parent = ammoGui
-local lastHeldTool = nil
-local lastClientAmmo, lastMaxAmmo = nil, nil
-
-local function trackToolAmmo(tool)
-	if not tool or not tool:IsA("Tool") then return end
-	lastHeldTool = tool
-	local function read()
-		local cur = tool:GetAttribute("ClientAmmo")
-		if cur == nil then cur = tool:GetAttribute("CurrentAmmo") end
-		local maxA = tool:GetAttribute("MaxAmmo") or 0
-		lastClientAmmo, lastMaxAmmo = tonumber(cur), tonumber(maxA)
-		if lastClientAmmo ~= nil then
-			ammoLbl.Text = string.format("%d / %d", lastClientAmmo, lastMaxAmmo or lastClientAmmo)
-			ammoLbl.Visible = true
-		end
-	end
-	read()
-	pcall(function()
-		tool:GetAttributeChangedSignal("ClientAmmo"):Connect(read)
-		tool:GetAttributeChangedSignal("CurrentAmmo"):Connect(read)
-		tool:GetAttributeChangedSignal("MaxAmmo"):Connect(read)
-	end)
-end
-
-local function hookCharTools(char)
-	if not char then return end
-	char.ChildAdded:Connect(function(ch)
-		if ch:IsA("Tool") then trackToolAmmo(ch) end
-	end)
-	local t = char:FindFirstChildOfClass("Tool")
-	if t then trackToolAmmo(t) end
-end
-if LocalPlayer.Character then hookCharTools(LocalPlayer.Character) end
-LocalPlayer.CharacterAdded:Connect(hookCharTools)
-
-RunService.RenderStepped:Connect(function()
-	if ST.isUnloaded then return end
-	local show = ST.WatermarkAmmoVisible ~= false
-	if not show then
-		ammoLbl.Visible = false
-		return
-	end
-	if lastClientAmmo ~= nil then
-		ammoLbl.Visible = true
-		ammoLbl.Text = string.format("%d / %d", lastClientAmmo, lastMaxAmmo or lastClientAmmo)
-	end
-	local m = UIS:GetMouseLocation()
-	ammoLbl.Position = UDim2.fromOffset(m.X, m.Y + 28)
-end)
 
 -- Open / Close
 local isOpen = false
