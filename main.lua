@@ -725,6 +725,56 @@ local function CreateTracer(origin, targetPos, color)
 	tween.Completed:Connect(function()
 		if part then part:Destroy() end
 	end)
+	-- sparks burst at muzzle, same color as tracer
+	pcall(function()
+		CreateSparks(origin, (targetPos - origin).Unit, color)
+	end)
+end
+
+function CreateSparks(origin, dir, color)
+	if typeof(origin) ~= "Vector3" then return end
+	color = color or ST.ColorSelf
+	dir = typeof(dir) == "Vector3" and dir.Magnitude > 0.01 and dir.Unit or Vector3.new(0, 0, -1)
+	local holder = Instance.new("Part")
+	holder.Name = "CLL_Spark"
+	holder.Anchored = true
+	holder.CanCollide = false
+	holder.CanQuery = false
+	holder.CanTouch = false
+	holder.Transparency = 1
+	holder.Size = Vector3.new(0.1, 0.1, 0.1)
+	holder.CFrame = CFrame.new(origin)
+	holder.Parent = tracerFolder
+	local att = Instance.new("Attachment", holder)
+	local pe = Instance.new("ParticleEmitter", att)
+	pe.Color = ColorSequence.new(color)
+	pe.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.18),
+		NumberSequenceKeypoint.new(0.35, 0.08),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	pe.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.05),
+		NumberSequenceKeypoint.new(0.5, 0.35),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	pe.LightEmission = 1
+	pe.LightInfluence = 0
+	pe.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+	pe.Lifetime = NumberRange.new(1, 2)
+	pe.LifetimeSpread = 42
+	pe.Speed = NumberRange.new(12, 28)
+	pe.Lifetime = NumberRange.new(0.18, 0.4)
+	pe.Drag = 4
+	pe.Acceleration = Vector3.new(0, -20, 0)
+	pe.Rate = 0
+	pe.Enabled = true
+	-- orient spray along shot
+	att.CFrame = CFrame.lookAt(Vector3.zero, dir)
+	pe:Emit(math.random(14, 22))
+	task.delay(0.55, function()
+		if holder then holder:Destroy() end
+	end)
 end
 
 local function tracerColorForCharacter(char)
@@ -2304,7 +2354,7 @@ UIS.InputChanged:Connect(function(input)
 		* CFrame.Angles(math.rad(-d.Y * 0.35), 0, 0)
 end)
 
--- VR punch: LMB (or Keys.VRSwing) fires real swing remotes
+-- VR punch: dump path is ONLY Grabmove + arm (Kick = leg kick, skip it)
 local VRSwingSide = 1
 UIS.InputBegan:Connect(function(input, gp)
 	if gp or ST.isUnloaded or not ST.VREnabled then return end
@@ -2318,9 +2368,9 @@ UIS.InputBegan:Connect(function(input, gp)
 	VRSwingSide = (VRSwingSide or 1) * -1
 	local arm = VRSwingSide > 0 and "RIGHT_ARM" or "LEFT_ARM"
 	pcall(function()
-		if not SwingRemote then return end
-		SwingRemote:FireServer("Kick")
-		SwingRemote:FireServer("Grabmove", arm)
+		if SwingRemote then
+			SwingRemote:FireServer("Grabmove", arm)
+		end
 	end)
 end)
 
@@ -2333,7 +2383,23 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	local char = LocalPlayer.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
-	if not cam or not hum or not hrp or hum.Health <= 0 then
+	local dead = (not hum) or (hum.Health <= 0) or (char and (char:GetAttribute("Ragdoll") or char:GetAttribute("Downed")))
+	if not cam or not char or not hrp or dead then
+		-- stop driving dead/ragdoll body (prevents death-loop fly)
+		pcall(function()
+			if char then
+				for _, n in ipairs({"Right Arm", "Left Arm", "RightUpperArm", "LeftUpperArm"}) do
+					local limb = char:FindFirstChild(n)
+					if limb and limb:IsA("BasePart") then
+						limb.Anchored = false
+						limb.AssemblyLinearVelocity = Vector3.zero
+						limb.AssemblyAngularVelocity = Vector3.zero
+					end
+				end
+				char:SetAttribute("DID_VR", false)
+			end
+		end)
+		vrDidInit = false
 		releaseVRCamera()
 		return
 	end
@@ -2345,7 +2411,7 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	local looking = UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
 	UIS.MouseIconEnabled = not looking
 
-	-- head CF from HRP + mouse-look rotation (PC stand-in for VR headset)
+	-- head basis: RMB = free look from HRP; else stay on character (not raw cam.CFrame — that flings hands)
 	local headCF = CFrame.new(hrp.Position + Vector3.new(0, 1.5, 0)) * VR_Cam_Rotation
 	if looking then
 		cam.CameraType = Enum.CameraType.Scriptable
@@ -2355,19 +2421,35 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 			cam.CameraType = Enum.CameraType.Custom
 			cam.CameraSubject = hum
 		end
-		headCF = cam.CFrame
+		-- use torso/HRP forward so arms stay on the body without RMB
+		local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso") or hrp
+		local look = hrp.CFrame.LookVector
+		local flat = Vector3.new(look.X, 0, look.Z)
+		if flat.Magnitude < 0.05 then flat = Vector3.new(0, 0, -1) else flat = flat.Unit end
+		headCF = CFrame.lookAt(hrp.Position + Vector3.new(0, 1.5, 0), hrp.Position + Vector3.new(0, 1.5, 0) + flat)
 	end
 
-	-- new-version hand placement (width / height / extend from ST)
 	local reach = math.clamp(ST.VRHandExtend or 1.2, 0, 12)
 	local handH = ST.VRHandHeight or 0.2
 	local handW = math.clamp(ST.VRHandWidth or 1.05, 0.3, 3)
 	local rightHand = headCF * CFrame.new(handW, -0.5 + handH, -0.8 - reach)
 	local leftHand = headCF * CFrame.new(-handW, -0.5 + handH, -0.8 - reach)
 
-	-- optional target punch (hand teleport + shake)
-	local vrTargets = GetVRTargets and GetVRTargets() or {}
-	if #vrTargets > 0 and vrTargets[1].head then
+	-- gun in hand: aim right arm toward cursor (mouse world hit)
+	local tool = char:FindFirstChildOfClass("Tool")
+	if tool and not looking then
+		local mouse = LocalPlayer:GetMouse()
+		local hitPos = mouse and mouse.Hit and mouse.Hit.Position
+		if hitPos then
+			local shoulder = hrp.Position + Vector3.new(handW * 0.5, 1.0 + handH, 0)
+			rightHand = CFrame.lookAt(shoulder, hitPos) * CFrame.new(0, 0, -0.6 - reach * 0.35)
+				* CFrame.Angles(math.rad(-15), 0, 0)
+		end
+	end
+
+	-- optional VR target grab pose (only when VRTarget list active)
+	local vrTargets = (ST.VRTargetEnabled and GetVRTargets and GetVRTargets()) or {}
+	if ST.VRTargetEnabled and #vrTargets > 0 and vrTargets[1].head then
 		local th = vrTargets[1].head
 		rightHand = CFrame.new(th.Position + Vector3.new(0.35, 0, 0)) * CFrame.Angles(math.rad(-70), 0, math.rad(20))
 		leftHand = CFrame.new(th.Position + Vector3.new(-0.35, 0, 0)) * CFrame.Angles(math.rad(-70), 0, math.rad(-20))
@@ -2420,15 +2502,22 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	end
 end)
 
-LocalPlayer.CharacterAdded:Connect(function()
+LocalPlayer.CharacterAdded:Connect(function(c)
 	vrDidInit = false
+	pcall(function()
+		if c then
+			c:SetAttribute("DID_VR", false)
+			c:SetAttribute("VR", false)
+		end
+	end)
 	task.defer(function()
-		if ST.VREnabled then
-			task.wait(0.3)
-			local c = LocalPlayer.Character
-			if c and ST.VREnabled then vrInitCharacter(c) end
-		else
-			releaseVRCamera()
+		releaseVRCamera()
+		if not ST.VREnabled then return end
+		task.wait(0.8)
+		local live = LocalPlayer.Character
+		local hum = live and live:FindFirstChildOfClass("Humanoid")
+		if live == c and ST.VREnabled and hum and hum.Health > 0 then
+			vrInitCharacter(live)
 		end
 	end)
 end)
