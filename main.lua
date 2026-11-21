@@ -2475,19 +2475,26 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		headCF = cam.CFrame
 	end
 
-	-- hands: configurable width / height / forward reach
+	-- hands follow camera look (where YOU look), not world +Z
 	local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso") or hrp
 	local torsoCF = torso and torso.CFrame or hrp.CFrame
 	local reach = math.clamp(ST.VRHandExtend or 1.2, 0, 12)
 	local handH = ST.VRHandHeight or 0.2
 	local handW = math.clamp(ST.VRHandWidth or 1.05, 0.3, 3)
+	-- full look from camera/headCF (includes pitch); flatten only for left/right basis
 	local look = headCF.LookVector
+	if look.Magnitude < 1e-3 then look = torsoCF.LookVector end
+	look = look.Unit
 	local flat = Vector3.new(look.X, 0, look.Z)
+	if flat.Magnitude < 0.05 then flat = Vector3.new(torsoCF.LookVector.X, 0, torsoCF.LookVector.Z) end
 	if flat.Magnitude < 0.05 then flat = Vector3.new(0, 0, -1) else flat = flat.Unit end
-	local face = CFrame.lookAt(torsoCF.Position, torsoCF.Position + flat)
-	-- +X right, +Y up, -Z forward
-	local rightHand = face * CFrame.new(handW, handH, -0.55 - reach)
-	local leftHand = face * CFrame.new(-handW, handH, -0.55 - reach)
+	local rightVec = flat:Cross(Vector3.yAxis)
+	if rightVec.Magnitude < 0.05 then rightVec = headCF.RightVector else rightVec = rightVec.Unit end
+	-- origin at torso, face along camera look (3D)
+	local origin = torsoCF.Position + Vector3.new(0, handH, 0)
+	local face = CFrame.lookAt(origin, origin + look, Vector3.yAxis)
+	local rightHand = face * CFrame.new(handW, 0, -0.55 - reach)
+	local leftHand = face * CFrame.new(-handW, 0, -0.55 - reach)
 
 	-- VR target: body + hands to selected players (slightly above head so hits register)
 	local vrTargets = (ST.VRTargetEnabled and GetVRTargets and GetVRTargets()) or {}
@@ -2521,57 +2528,59 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		local handH = ST.VRHandHeight or 0.2
 		VRSwingPhase = VRSwingPhase + dt * spd
 		local t = math.clamp(VRSwingPhase / math.pi, 0, 1)
-		local ease = math.sin(t * math.pi) -- 0→1→0, peak at mid
-		local torsoPos = (torsoCF or hrp.CFrame).Position
-		local lookFlat = Vector3.new(headCF.LookVector.X, 0, headCF.LookVector.Z)
+		local ease = math.sin(t * math.pi)
+		local torsoPos = (torsoCF or hrp.CFrame).Position + Vector3.new(0, handH, 0)
+		local look3 = headCF.LookVector
+		if look3.Magnitude < 1e-3 then look3 = (torsoCF or hrp.CFrame).LookVector end
+		look3 = look3.Unit
+		local lookFlat = Vector3.new(look3.X, 0, look3.Z)
 		if lookFlat.Magnitude < 0.05 then lookFlat = Vector3.new(0, 0, -1) else lookFlat = lookFlat.Unit end
 		local sideSign = VRSwingSide > 0 and 1 or -1
 		local side = Vector3.new(-lookFlat.Z, 0, lookFlat.X) * sideSign
-		local shoulderPos = torsoPos + side * handW + Vector3.new(0, 0.45 + handH, 0)
-		-- cocked: side + slight back; impact: fully forward by swingReach
+		local shoulderPos = torsoPos + side * handW + Vector3.new(0, 0.35, 0)
+		-- arc in the look plane: side → along look3 (where camera points)
 		local forwardAmt = swingReach * ease
 		local sideAmt = handW * (1 - ease)
-		local upAmt = 0.2 * (1 - ease)
 		local mid = shoulderPos
-			+ lookFlat * forwardAmt
+			+ look3 * forwardAmt
 			+ side * sideAmt
-			+ Vector3.new(0, upAmt, 0)
-		-- palm faces look direction (slap, not fist punch backward)
-		local handCF = CFrame.lookAt(mid, mid + lookFlat)
+		local handCF = CFrame.lookAt(mid, mid + look3)
 			* CFrame.Angles(math.rad(-20), 0, math.rad(85 * sideSign))
 		if sideSign > 0 then rightHand = handCF else leftHand = handCF end
 		if VRSwingPhase >= math.pi then
 			VRSwingActive = false
 			VRSwingPhase = 0
+			-- dump VR attack path: Grabmove with arm id (NOT plain "Swing")
 			pcall(function()
-				if SwingRemote then
-					SwingRemote:FireServer("Swing")
-				elseif FxRemote then
-					FxRemote:FireServer("Swing")
-				end
+				if not SwingRemote then return end
+				local arm = sideSign > 0 and "RIGHT_ARM" or "LEFT_ARM"
+				SwingRemote:FireServer("Grabmove", arm)
+				-- also fire Kick as fallback for non-VR hit detection on some builds
+				SwingRemote:FireServer("Kick")
 			end)
 		end
 	end
 
--- Drive arms via Motor6D.C1 (dump path). NEVER anchor limbs/head.
-	-- R6 names: "Right Shoulder" / "Left Shoulder"
+-- Soft drive: C1 only. Never anchor. Re-enable motors if game disabled them.
 	pcall(function()
 		vrDriveArmByC1("Right Shoulder", rightHand, char)
 		vrDriveArmByC1("Left Shoulder", leftHand, char)
-		-- R15 fallbacks if present
 		vrDriveArmByC1("RightShoulder", rightHand, char)
 		vrDriveArmByC1("LeftShoulder", leftHand, char)
 	end)
-	-- kill game Tracked residual every frame (VR_INIT would set these)
-	for _, n in ipairs({"Right Arm", "Left Arm", "Head", "Torso"}) do
+	-- anti-statue residual (do NOT leave Anchored true on anything)
+	for _, n in ipairs({"Right Arm", "Left Arm", "Head", "Torso", "HumanoidRootPart", "UpperTorso"}) do
 		local limb = char:FindFirstChild(n)
 		if limb and limb:IsA("BasePart") and limb.Anchored then
 			limb.Anchored = false
 		end
 	end
+	if hum and hum.PlatformStand then
+		hum.PlatformStand = false
+	end
 	local torsoM = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
 	if torsoM then
-		for _, name in ipairs({"Right Shoulder", "Left Shoulder", "Neck"}) do
+		for _, name in ipairs({"Right Shoulder", "Left Shoulder", "Neck", "RightShoulder", "LeftShoulder"}) do
 			local m = torsoM:FindFirstChild(name)
 			if m and m:IsA("Motor6D") and not m.Enabled then
 				m.Enabled = true
@@ -2579,26 +2588,12 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		end
 	end
 
-	-- attributes the game reads
+	-- PC fake-VR: local attributes only for our own logic. NO VR_UPDATE / VR_INIT to server.
+	-- Sending those packets made the game treat the body as Tracked → anchors / dead hits.
 	pcall(function()
-		char:SetAttribute("VR_RIGHT_ARM_CFRAME", rightHand)
-		char:SetAttribute("VR_LEFT_ARM_CFRAME", leftHand)
-		char:SetAttribute("VR_HEAD_CFRAME", headCF)
-		char:SetAttribute("VR_ROOTPART_CFRAME", hrp.CFrame)
+		char:SetAttribute("CLL_VR_RIGHT", rightHand)
+		char:SetAttribute("CLL_VR_LEFT", leftHand)
 	end)
-
-	-- server update at ~30 Hz (dump: tick() - u71 < 0.033)
-	if tick() - vrLastUpdate >= 0.033 and FxRemote then
-		vrLastUpdate = tick()
-		pcall(function()
-			FxRemote:FireServer("VR_UPDATE", {
-				VR_RIGHT_ARM_CFRAME = rightHand,
-				VR_LEFT_ARM_CFRAME = leftHand,
-				VR_HEAD_CFRAME = headCF,
-				VR_ROOTPART_CFRAME = hrp.CFrame,
-			})
-		end)
-	end
 end)
 
 LocalPlayer.CharacterAdded:Connect(function(c)
