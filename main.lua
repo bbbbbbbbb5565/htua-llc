@@ -303,7 +303,7 @@ local Keys = {
 	JumpPower = Enum.KeyCode.Unknown, Heal = Enum.KeyCode.Unknown, SilentAim = Enum.KeyCode.Unknown,
 	ChinaHat = Enum.KeyCode.Unknown, Wings = Enum.KeyCode.Unknown, AntiLag = Enum.KeyCode.Unknown,
 	Menu = Enum.KeyCode.RightShift, VRGrab = Enum.KeyCode.Unknown, TeleportHeal = Enum.KeyCode.Unknown,
-	Combo = Enum.KeyCode.Unknown, ReloadSpas = Enum.KeyCode.Unknown
+	Combo = Enum.KeyCode.Q, ReloadSpas = Enum.KeyCode.Unknown
 }
 
 
@@ -2457,20 +2457,13 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	end
 
 	if vrBlocked() then
-		-- HARD off: stop packets, unanchor, clear DID_VR (dump stops tracked path on ragdoll)
+		-- Only teardown if VR was actually active. Never touch physics when VR is simply off
+		-- (was zeroing velocity every frame → turtle walk / feather fall).
 		if vrDidInit or (char and char:GetAttribute("DID_VR")) then
 			pcall(vrShutdown)
-		else
-			pcall(function()
-				if char then
-					char:SetAttribute("DID_VR", false)
-					char:SetAttribute("VR", false)
-				end
-				vrForceUnanchor(char)
-			end)
+			vrDidInit = false
+			pcall(releaseVRCamera)
 		end
-		vrDidInit = false
-		pcall(releaseVRCamera)
 		return
 	end
 
@@ -4584,6 +4577,73 @@ task.spawn(function()
 	end)
 end)
 
+
+-- Ammo readout under cursor (ClientAmmo of last held tool)
+local ammoGui = Instance.new("ScreenGui")
+ammoGui.Name = "CLL_AmmoWM"
+ammoGui.ResetOnSpawn = false
+ammoGui.IgnoreGuiInset = true
+ammoGui.DisplayOrder = 100
+pcall(function()
+	ammoGui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
+end)
+if not ammoGui.Parent then ammoGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+local ammoLbl = Instance.new("TextLabel")
+ammoLbl.Name = "Ammo"
+ammoLbl.BackgroundTransparency = 1
+ammoLbl.Size = UDim2.fromOffset(120, 22)
+ammoLbl.AnchorPoint = Vector2.new(0.5, 0)
+ammoLbl.Position = UDim2.fromOffset(0, 0)
+ammoLbl.Font = Enum.Font.GothamBold
+ammoLbl.TextSize = 16
+ammoLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+ammoLbl.TextStrokeTransparency = 0.4
+ammoLbl.TextStrokeColor3 = Color3.new(0, 0, 0)
+ammoLbl.Text = ""
+ammoLbl.Visible = false
+ammoLbl.Parent = ammoGui
+local lastHeldTool = nil
+local lastClientAmmo, lastMaxAmmo = nil, nil
+
+local function trackToolAmmo(tool)
+	if not tool or not tool:IsA("Tool") then return end
+	lastHeldTool = tool
+	local function read()
+		local cur = tool:GetAttribute("ClientAmmo")
+		if cur == nil then cur = tool:GetAttribute("CurrentAmmo") end
+		local maxA = tool:GetAttribute("MaxAmmo") or 0
+		lastClientAmmo, lastMaxAmmo = tonumber(cur), tonumber(maxA)
+		if lastClientAmmo ~= nil then
+			ammoLbl.Text = string.format("%d / %d", lastClientAmmo, lastMaxAmmo or lastClientAmmo)
+			ammoLbl.Visible = true
+		end
+	end
+	read()
+	pcall(function()
+		tool:GetAttributeChangedSignal("ClientAmmo"):Connect(read)
+		tool:GetAttributeChangedSignal("CurrentAmmo"):Connect(read)
+		tool:GetAttributeChangedSignal("MaxAmmo"):Connect(read)
+	end)
+end
+
+local function hookCharTools(char)
+	if not char then return end
+	char.ChildAdded:Connect(function(ch)
+		if ch:IsA("Tool") then trackToolAmmo(ch) end
+	end)
+	local t = char:FindFirstChildOfClass("Tool")
+	if t then trackToolAmmo(t) end
+end
+if LocalPlayer.Character then hookCharTools(LocalPlayer.Character) end
+LocalPlayer.CharacterAdded:Connect(hookCharTools)
+
+RunService.RenderStepped:Connect(function()
+	if ST.isUnloaded then return end
+	if not ammoLbl.Visible then return end
+	local m = UIS:GetMouseLocation()
+	ammoLbl.Position = UDim2.fromOffset(m.X, m.Y + 28)
+end)
+
 -- Open / Close
 local isOpen = false
 local tweens = {}
@@ -4665,6 +4725,32 @@ local function TeleportToHeal()
 	local pos = brick.Position + Vector3.new(0, 3.5, 0)
 	root.CFrame = CFrame.new(pos)
 	root.AssemblyLinearVelocity = Vector3.zero
+end
+
+
+local function ComboQ()
+	-- Q grab (unchanged): Grabmove both arms on nearest VR/selected target or empty grab
+	if not SwingRemote then
+		pcall(function()
+			local r = ReplicatedStorage:FindFirstChild("Remotes")
+			SwingRemote = r and r:FindFirstChild("Swing")
+		end)
+	end
+	if not SwingRemote then return end
+	local targets = (GetVRTargets and GetVRTargets()) or {}
+	if #targets == 0 and GetTargets then
+		targets = GetTargets() or {}
+	end
+	local victim = targets[1] and targets[1].char or nil
+	pcall(function()
+		if victim then
+			SwingRemote:FireServer("Grabmove", "RIGHT_ARM", victim)
+			SwingRemote:FireServer("Grabmove", "LEFT_ARM", victim)
+		else
+			SwingRemote:FireServer("Grabmove", "RIGHT_ARM")
+			SwingRemote:FireServer("Grabmove", "LEFT_ARM")
+		end
+	end)
 end
 
 UIS.InputBegan:Connect(function(input, gp)
