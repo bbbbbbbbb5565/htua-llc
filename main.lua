@@ -48,7 +48,7 @@ local ST = {
 	VRHandExtend = 1.2,   -- forward reach (studs)
 	VRHandHeight = 0.2,   -- vertical offset from torso
 	VRHandWidth = 1.05,   -- half-separation left/right
-	VRSwingReach = 1.6,   -- how far the slap travels forward
+	VRSwingReach = 2.5,   -- how far the slap travels forward
 	VRShakeIntensity = 0.5,
 	VRAuraSpeed = 1,
 	VRAuraRadius = 8,
@@ -2193,25 +2193,35 @@ end
 task.spawn(function()
 	while not ST.isUnloaded do
 		task.wait(0.35)
-		if ST.VREnabled or ST.LocalInvisEnabled or ST.HealEnabled or ST.FlyEnabled then
-			-- skip
+		if ST.LocalInvisEnabled or ST.HealEnabled then
+			-- those features own their anchors
 		else
 			local char = LocalPlayer.Character
 			if char then
 				pcall(function()
-					char:SetAttribute("DID_VR", false)
-					char:SetAttribute("VR", false)
+					if not ST.VREnabled then
+						char:SetAttribute("DID_VR", false)
+						char:SetAttribute("VR", false)
+					end
 					local hum = char:FindFirstChildOfClass("Humanoid")
-					if hum and hum.PlatformStand then
+					if hum and hum.PlatformStand and not ST.HealEnabled then
 						hum.PlatformStand = false
 					end
-					for _, d in ipairs(char:GetChildren()) do
+					for _, d in ipairs(char:GetDescendants()) do
 						if d:IsA("BasePart") and d.Anchored then
-							d.Anchored = false
+							if ST.FlyEnabled and d.Name == "HumanoidRootPart" then
+								-- leave fly root
+							else
+								d.Anchored = false
+							end
+						end
+						if d:IsA("Motor6D") and not d.Enabled and not ST.VREnabled then
+							d.Enabled = true
 						end
 					end
-					-- only motors we disabled for VR, not every Motor6D (that broke gun/FX anims)
-					if _G.CLL_vrRestore then pcall(_G.CLL_vrRestore) end
+					if not ST.VREnabled and _G.CLL_vrRestore then
+						pcall(_G.CLL_vrRestore)
+					end
 				end)
 			end
 		end
@@ -3569,7 +3579,7 @@ local function buildVR()
 	y = y + 55
 	slider(scroll, y, "Hand Width (gap)", 0.3, 2.5, ST.VRHandWidth or 1.05, 0.05, function(v) ST.VRHandWidth = v end)
 	y = y + 55
-	slider(scroll, y, "Swing Reach (forward)", 0.4, 5, ST.VRSwingReach or 1.6, 0.1, function(v) ST.VRSwingReach = v; ST.VRSwingAmp = v end)
+	slider(scroll, y, "Swing Reach (удар, дальность)", 0.5, 8, ST.VRSwingReach or 2.5, 0.1, function(v) ST.VRSwingReach = v; ST.VRSwingAmp = v end)
 	y = y + 55
 	slider(scroll, y, "Swing Speed", 6, 24, ST.VRSwingSpeed or 14, 1, function(v) ST.VRSwingSpeed = v end)
 	y = y + 50
@@ -4071,7 +4081,7 @@ local function buildSettings()
 			local c = arrToColor(data.skyColor)
 			if c then SkyColor = c end
 		end
-		if data.vr ~= nil then ST.VREnabled = data.vr end
+		if data.vr ~= nil then ST.VREnabled = false end -- never auto-enable VR on inject
 		if data.vrShake ~= nil then ST.VRShakeEnabled = data.vrShake end
 		if data.vrShakeI then ST.VRShakeIntensity = data.vrShakeI end
 		if data.vrHand then ST.VRHandExtend = data.vrHand end
@@ -4760,6 +4770,23 @@ RunService.RenderStepped:Connect(function()
 			pcall(function() cc.Brightness = 0; cc.Contrast = 0; cc.Saturation = 0; cc.TintColor = Color3.new(1,1,1) end)
 		end
 		-- do NOT touch CameraOffset / FOV here — flash only
+	end
+end)
+
+-- BOOT SAFETY: never start with VR armed; clear residual anchors from prior inject
+ST.VREnabled = false
+pcall(function()
+	if _G.CLL_vrRestore then _G.CLL_vrRestore() end
+	local char = LocalPlayer.Character
+	if char then
+		char:SetAttribute("VR", false)
+		char:SetAttribute("DID_VR", false)
+		for _, d in ipairs(char:GetDescendants()) do
+			if d:IsA("BasePart") and d.Anchored then d.Anchored = false end
+			if d:IsA("Motor6D") then d.Enabled = true end
+		end
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if hum then hum.PlatformStand = false end
 	end
 end)
 
