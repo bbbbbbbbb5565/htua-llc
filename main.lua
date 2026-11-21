@@ -1,6 +1,6 @@
 --[[
     ╔═══════════════════════════════════════════════════════════════╗
-    ║              CLL CHEAT - FULL INTEGRATION v11.10                ║
+    ║              CLL CHEAT - FULL INTEGRATION v11.10-h (10.8 menu + 11.10 features)                ║
     ╠═══════════════════════════════════════════════════════════════╣
     ║  SUK head-hit, real crosshair, tracers, ESP outline nick,     ║
     ║  ChinaHat/Wings fix, VR hands, anti-flash/shake, antibypass   ║
@@ -2619,7 +2619,7 @@ oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
 
 		-- Silent aim / fire path: match FireRemote OR any FireServer(tool, "Fire", payload)
 		local isGunFire = (args[2] == "Fire" and typeof(args[3]) == "table" and typeof(args[3].origin) == "Vector3")
-			and (self == FireRemote or (typeof(args[1]) == "Instance" and args[1]:IsA("Tool")))
+			and (self == FireRemote or (typeof(args[1]) == "Instance" and args[1].ClassName == "Tool"))
 		if isGunFire then
 			pcall(function()
 				markLocalShot(args[3].origin)
@@ -2683,10 +2683,10 @@ oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
 
 	-- Play() mute/swap gun + kill sounds
 	if method == "Play" then
-		-- CRITICAL: only touch Sound instances — never block AnimationTrack:Play()
-		local isSound = false
-		pcall(function() isSound = self:IsA("Sound") end)
-		if isSound then
+		-- ClassName via __index — never :IsA inside __namecall (re-entry kills Play for anims/sounds/tweens)
+		local className = ""
+		pcall(function() className = self.ClassName end)
+		if className == "Sound" then
 			local ok, name = pcall(function() return self.Name end)
 			local ok2, parent = pcall(function() return self.Parent and self.Parent.Name end)
 			local n = (ok and tostring(name) or ""):lower()
@@ -2698,17 +2698,16 @@ oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
 				end
 			end
 			if ST.CustomGunSoundsEnabled then
-				-- only actual shot sounds, not reload/equip/empty
 				if (n == "fire" or n == "shot" or n == "shoot" or n == "gunshot" or n == "blast"
 					or n:find("fire%.") or n:find("shot%."))
 					and not n:find("reload") and not n:find("empty") and not n:find("equip") then
-					return -- mute original shot
+					return
 				end
 			end
 		end
 	end
 
-	return oldNamecall(self, unpackFn(args))
+	return oldNamecall(self, ...)
 end)
 
 -- hard anti-camera-shake: freeze CFrame deltas from BodyMovers / humanoid
@@ -2846,7 +2845,7 @@ local window = new("CanvasGroup", { Size = UDim2.fromOffset(DESIGN_W, DESIGN_H),
 UIRefs.window = window
 window.Visible = false
 local uiScale = new("UIScale", { Parent = window })
-local baseScale = 1; local animFactor = new("NumberValue", { Value = 0, Parent = gui })
+local baseScale = 1; local animFactor = new("NumberValue", { Value = 1, Parent = gui })
 local function applyScale() uiScale.Scale = math.max(baseScale * animFactor.Value, 0.001) end
 animFactor.Changed:Connect(applyScale)
 function fit() local cam = workspace.CurrentCamera; if not cam then return end; local vs = cam.ViewportSize; baseScale = math.clamp(math.min((vs.X - 24) / DESIGN_W, (vs.Y - 24) / DESIGN_H), 0.4, 1); applyScale() end
@@ -4338,23 +4337,55 @@ end)
 -- Open / Close
 local isOpen = false
 local tweens = {}
-local function play(obj, ti, goal) local t = TweenService:Create(obj, ti, goal); table.insert(tweens, t); t:Play(); return t end
+local function play(obj, ti, goal)
+	if obj == nil or typeof(ti) ~= "TweenInfo" or type(goal) ~= "table" then return nil end
+	local ok, t = pcall(function() return TweenService:Create(obj, ti, goal) end)
+	if not ok or not t then return nil end
+	pcall(function()
+		table.insert(tweens, t)
+		t:Play()
+	end)
+	return t
+end
 local function setOpen(state)
+	-- 10.8 menu motion + hard fallbacks (no stuck glass / no nil crash / no stuck open)
 	if state == isOpen then return end
 	isOpen = state
-	for _, t in ipairs(tweens) do t:Cancel() end; table.clear(tweens)
+	for _, t in ipairs(tweens) do pcall(function() t:Cancel() end) end
+	table.clear(tweens)
+	if not window then return end
 	local A = AnimPresets[AnimName] or AnimPresets.Smooth
-	local oi = TweenInfo.new(A.open[3] * 0.85, A.open[1], A.open[2])
-	local ci = TweenInfo.new(A.close[3] * 0.9, A.close[1], A.close[2])
+	local scaleStart = (type(A.scale) == "number" and A.scale) or 0.93
+	local oi = TweenInfo.new((A.open[3] or 0.5) * 0.85, A.open[1], A.open[2])
+	local ci = TweenInfo.new((A.close[3] or 0.32) * 0.9, A.close[1], A.close[2])
 	if state then
 		window.Visible = true
-		window.GroupTransparency = 0
-		animFactor.Value = A.scale
+		window.GroupTransparency = 1
+		animFactor.Value = scaleStart
 		play(animFactor, oi, { Value = 1 })
+		play(window, TweenInfo.new(0.22, ES.Sine, ED.Out), { GroupTransparency = 0 })
+		task.delay(0.35, function()
+			if isOpen and window then
+				window.GroupTransparency = 0
+				animFactor.Value = 1
+			end
+		end)
 	else
-		play(animFactor, ci, { Value = A.scale })
-		play(window, TweenInfo.new(0.2, ES.Sine, ED.In), { GroupTransparency = 1 })
-		task.delay(0.22, function()
+		play(animFactor, ci, { Value = scaleStart })
+		local fade = play(window, TweenInfo.new(0.2, ES.Sine, ED.In), { GroupTransparency = 1 })
+		if fade then
+			pcall(function()
+				fade.Completed:Connect(function(st)
+					if st == Enum.PlaybackState.Completed and not isOpen and window then
+						window.Visible = false
+					end
+				end)
+			end)
+		else
+			window.GroupTransparency = 1
+			window.Visible = false
+		end
+		task.delay(0.32, function()
 			if not isOpen and window then
 				window.Visible = false
 				window.GroupTransparency = 1
