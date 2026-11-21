@@ -2291,6 +2291,9 @@ local function releaseVRCamera()
 	if not cam then return end
 	UIS.MouseIconEnabled = true
 	cam.CameraType = Enum.CameraType.Custom
+	pcall(function()
+		LocalPlayer.CameraMode = Enum.CameraMode.Classic
+	end)
 	local live = LocalPlayer.Character
 	local liveHum = live and live:FindFirstChildOfClass("Humanoid")
 	if liveHum and liveHum.Health > 0 then
@@ -2334,7 +2337,7 @@ local function vrInitCharacter(char)
 	if char:GetAttribute("Ragdoll") or char:GetAttribute("Downed") then return end
 	-- don't re-init within spawn grace (stops death-loop after respawn)
 	local spawnT = char:GetAttribute("CLL_SpawnT")
-	if typeof(spawnT) == "number" and (tick() - spawnT) < 1.5 then
+	if typeof(spawnT) == "number" and (tick() - spawnT) < 2.5 then
 		return
 	end
 	pcall(function()
@@ -2442,9 +2445,8 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	end
 	-- spawn grace: do not drive/init for 1.5s after CharacterAdded
 	local spawnT = char:GetAttribute("CLL_SpawnT")
-	if typeof(spawnT) == "number" and (tick() - spawnT) < 1.5 then
+	if typeof(spawnT) == "number" and (tick() - spawnT) < 2.5 then
 		vrForceUnanchor(char)
-		releaseVRCamera()
 		return
 	end
 
@@ -2455,41 +2457,45 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	local looking = UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
 	UIS.MouseIconEnabled = not looking
 
-	-- head basis: RMB = free look from HRP; else stay on character (not raw cam.CFrame — that flings hands)
-	local headCF = CFrame.new(hrp.Position + Vector3.new(0, 1.5, 0)) * VR_Cam_Rotation
+	-- ALWAYS first-person while VR is on (no 3rd person body + floating arms)
+	pcall(function()
+		LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
+	end)
+	if cam.CameraType == Enum.CameraType.Scriptable then
+		cam.CameraType = Enum.CameraType.Custom
+	end
+	cam.CameraSubject = hum
+
+	-- Head basis ALWAYS from body (HRP), never from cam.CFrame
+	-- RMB: free look via VR_Cam_Rotation; released: character yaw only
+	local headPos = hrp.Position + Vector3.new(0, 1.5, 0)
+	local headCF
 	if looking then
-		cam.CameraType = Enum.CameraType.Scriptable
-		cam.CFrame = headCF
+		headCF = CFrame.new(headPos) * VR_Cam_Rotation
 	else
-		if cam.CameraType == Enum.CameraType.Scriptable then
-			cam.CameraType = Enum.CameraType.Custom
-			cam.CameraSubject = hum
-		end
-		-- use torso/HRP forward so arms stay on the body without RMB
-		local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso") or hrp
-		local look = hrp.CFrame.LookVector
-		local flat = Vector3.new(look.X, 0, look.Z)
-		if flat.Magnitude < 0.05 then flat = Vector3.new(0, 0, -1) else flat = flat.Unit end
-		headCF = CFrame.lookAt(hrp.Position + Vector3.new(0, 1.5, 0), hrp.Position + Vector3.new(0, 1.5, 0) + flat)
+		local yaw = select(2, hrp.CFrame:ToOrientation())
+		headCF = CFrame.new(headPos) * CFrame.Angles(0, yaw, 0)
+		-- keep rotation in sync so RMB doesn't snap
+		VR_Cam_Rotation = CFrame.Angles(0, yaw, 0)
 	end
 
 	local reach = math.clamp(ST.VRHandExtend or 1.2, 0, 12)
 	local handH = ST.VRHandHeight or 0.2
 	local handW = math.clamp(ST.VRHandWidth or 0.7, 0.3, 3)
-	-- R6 arm long-axis is Y: rotate -90X so arm points along look (-Z of headCF)
-	local armOrientR = CFrame.Angles(math.rad(-90), math.rad(-10), 0)
-	local armOrientL = CFrame.Angles(math.rad(-90), math.rad(10), 0)
-	local rightHand = headCF * CFrame.new(handW, -0.35 + handH, -0.55 - reach) * armOrientR
-	local leftHand = headCF * CFrame.new(-handW, -0.35 + handH, -0.55 - reach) * armOrientL
+	-- R6 arms: long axis is Y → aim forward along -Z of head
+	local armOrientR = CFrame.Angles(math.rad(-90), math.rad(-12), 0)
+	local armOrientL = CFrame.Angles(math.rad(-90), math.rad(12), 0)
+	local rightHand = headCF * CFrame.new(handW, -0.4 + handH, -0.5 - reach) * armOrientR
+	local leftHand = headCF * CFrame.new(-handW, -0.4 + handH, -0.5 - reach) * armOrientL
 
-	-- gun equipped: aim right arm at cursor (shoulder from HRP, not floating cam)
+	-- gun equipped: aim right arm at cursor from shoulder on body
 	local tool = char:FindFirstChildOfClass("Tool")
 	if tool then
 		local mouse = LocalPlayer:GetMouse()
 		local hitPos = mouse and mouse.Hit and mouse.Hit.Position
 		if hitPos then
-			local shoulder = (hrp.CFrame * CFrame.new(handW * 0.85, 0.9 + handH, -0.2)).Position
-			rightHand = CFrame.lookAt(shoulder, hitPos) * CFrame.new(0, 0, -0.5 - reach * 0.25) * armOrientR
+			local shoulder = (hrp.CFrame * CFrame.new(handW * 0.85, 0.85 + handH, -0.15)).Position
+			rightHand = CFrame.lookAt(shoulder, hitPos) * CFrame.new(0, 0, -0.45 - reach * 0.2) * armOrientR
 		end
 	end
 
@@ -2558,14 +2564,14 @@ LocalPlayer.CharacterAdded:Connect(function(c)
 			c:SetAttribute("VR", false)
 		end
 	end)
-	-- hard cleanup residual anchors from previous life
 	pcall(function()
 		vrRestoreShoulders()
 		vrForceUnanchor(c)
 		releaseVRCamera()
 	end)
 	task.defer(function()
-		task.wait(1.6)
+		-- long grace: server often kills if VR_INIT fires mid-spawn
+		task.wait(2.5)
 		local live = LocalPlayer.Character
 		local hum = live and live:FindFirstChildOfClass("Humanoid")
 		if live ~= c then return end
@@ -2573,7 +2579,7 @@ LocalPlayer.CharacterAdded:Connect(function(c)
 			vrForceUnanchor(live)
 			return
 		end
-		if hum and hum.Health > 0 and not live:GetAttribute("Ragdoll") then
+		if hum and hum.Health > 0 and not live:GetAttribute("Ragdoll") and not live:GetAttribute("Downed") then
 			vrInitCharacter(live)
 		end
 	end)
