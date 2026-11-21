@@ -739,47 +739,52 @@ function CreateSparks(origin, dir, color)
 	if typeof(origin) ~= "Vector3" then return end
 	color = color or ST.ColorSelf
 	dir = typeof(dir) == "Vector3" and dir.Magnitude > 0.01 and dir.Unit or Vector3.new(0, 0, -1)
-	local holder = Instance.new("Part")
-	holder.Name = "CLL_Spark"
-	holder.Anchored = true
-	holder.CanCollide = false
-	holder.CanQuery = false
-	holder.CanTouch = false
-	holder.Transparency = 1
-	holder.Size = Vector3.new(0.1, 0.1, 0.1)
-	holder.CFrame = CFrame.new(origin)
-	holder.Parent = tracerFolder
-	local att = Instance.new("Attachment", holder)
-	local pe = Instance.new("ParticleEmitter", att)
-	pe.Color = ColorSequence.new(color)
-	pe.Size = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.18),
-		NumberSequenceKeypoint.new(0.35, 0.08),
-		NumberSequenceKeypoint.new(1, 0),
-	})
-	pe.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.05),
-		NumberSequenceKeypoint.new(0.5, 0.35),
-		NumberSequenceKeypoint.new(1, 1),
-	})
-	pe.LightEmission = 1
-	pe.LightInfluence = 0
-	pe.Texture = "rbxasset://textures/particles/sparkles_main.dds"
-	pe.Lifetime = NumberRange.new(1, 2)
-	pe.LifetimeSpread = 42
-	pe.Speed = NumberRange.new(12, 28)
-	pe.Lifetime = NumberRange.new(0.18, 0.4)
-	pe.Drag = 4
-	pe.Acceleration = Vector3.new(0, -20, 0)
-	pe.Rate = 0
-	pe.Enabled = true
-	-- orient spray along shot
-	att.CFrame = CFrame.lookAt(Vector3.zero, dir)
-	pe:Emit(math.random(14, 22))
-	task.delay(0.55, function()
-		if holder then holder:Destroy() end
-	end)
+	local dur = math.clamp(ST.TracerDuration or 0.5, 0.05, 3)
+	local folder = tracerFolder
+	if not folder then return end
+	-- ~60 short shards near muzzle (not full-distance tracers)
+	local count = 60
+	local maxDist = 4.5
+	for n = 1, count do
+		local side = Vector3.new(
+			(math.random() - 0.5) * 2.2,
+			(math.random() - 0.5) * 2.2,
+			(math.random() - 0.5) * 2.2
+		)
+		local along = dir * (math.random() * maxDist)
+		local pos = origin + along * 0.35 + side * 0.15
+		local tip = origin + along + side * 0.55
+		local dist = (tip - pos).Magnitude
+		if dist < 0.08 then dist = 0.08 end
+		local part = Instance.new("Part")
+		part.Name = "CLL_Spark"
+		part.Anchored = true
+		part.CanCollide = false
+		part.CanQuery = false
+		part.CanTouch = false
+		part.CastShadow = false
+		part.Material = Enum.Material.Neon
+		part.Color = color
+		part.Transparency = 0.05 + math.random() * 0.25
+		part.Size = Vector3.new(0.04 + math.random() * 0.05, 0.04 + math.random() * 0.05, dist)
+		part.CFrame = CFrame.lookAt(pos, tip) * CFrame.new(0, 0, -dist / 2)
+		part.Parent = folder
+		local life = dur * (0.45 + math.random() * 0.55)
+		task.delay(life * 0.15, function()
+			if not part.Parent then return end
+			pcall(function()
+				TweenService:Create(part, TweenInfo.new(life * 0.85, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+					Transparency = 1,
+					Size = Vector3.new(0.02, 0.02, dist * 0.3),
+				}):Play()
+			end)
+		end)
+		task.delay(life + 0.05, function()
+			if part then part:Destroy() end
+		end)
+	end
 end
+
 
 local function tracerColorForCharacter(char)
 	if not char then return ST.ColorOthers, ST.TracerOthersEnabled end
@@ -2460,7 +2465,7 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	local looking = UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
 	UIS.MouseIconEnabled = not looking
 
-	-- camera like FOV-lock: first person, no Scriptable fly, kill recoil offsets
+	-- FOV-lock style camera: first person, no Scriptable fly
 	pcall(function()
 		LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
 		hum.CameraOffset = Vector3.zero
@@ -2473,55 +2478,39 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		cam.CameraSubject = hum
 	end
 
-	-- BODY-LOCKED basis: arms/head never leave the character
-	local headPart = char:FindFirstChild("Head")
+	-- TORSO-based hands (11.10 ref math): extend/height/width work from body
 	local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso") or hrp
+	local torsoCF = torso.CFrame
+	local headPart = char:FindFirstChild("Head")
 	local headPos = (headPart and headPart.Position) or (hrp.Position + Vector3.new(0, 1.5, 0))
 
 	local headCF
 	if looking then
-		-- free look, but pivot stays on real head position
 		headCF = CFrame.new(headPos) * VR_Cam_Rotation
 	else
-		-- attached to body: real head CFrame (or torso yaw)
-		if headPart then
-			headCF = headPart.CFrame
-		else
-			local yaw = select(2, hrp.CFrame:ToOrientation())
-			headCF = CFrame.new(headPos) * CFrame.Angles(0, yaw, 0)
-		end
-		-- soft-sync look so next RMB doesn't snap hard
-		local y = select(2, headCF:ToOrientation())
-		VR_Cam_Rotation = CFrame.Angles(0, y, 0)
+		local yaw = select(2, hrp.CFrame:ToOrientation())
+		headCF = CFrame.new(headPos) * CFrame.Angles(0, yaw, 0)
+		VR_Cam_Rotation = CFrame.Angles(0, yaw, 0)
 	end
 
-	local reach = math.clamp(ST.VRHandExtend or 1.0, 0, 8)
-	local handH = ST.VRHandHeight or 0.15
-	local handW = math.clamp(ST.VRHandWidth or 0.65, 0.25, 2)
-	local armOrientR = CFrame.Angles(math.rad(-90), math.rad(-10), 0)
-	local armOrientL = CFrame.Angles(math.rad(-90), math.rad(10), 0)
+	local reach = math.clamp(ST.VRHandExtend or 0, 0, 10)
+	local handH = ST.VRHandHeight or 0.2
+	local handW = math.clamp(ST.VRHandWidth or 1.05, 0.3, 2.5)
+	local look = headCF.LookVector
+	local flat = Vector3.new(look.X, 0, look.Z)
+	if flat.Magnitude < 0.05 then flat = Vector3.new(0, 0, -1) else flat = flat.Unit end
+	local face = CFrame.lookAt(torsoCF.Position, torsoCF.Position + flat)
+	-- +X right, +Y height, -Z forward
+	local rightHand = face * CFrame.new(handW, handH, -0.55 - reach)
+	local leftHand = face * CFrame.new(-handW, handH, -0.55 - reach)
 
-	-- shoulders from TORSO (body), not floating cam
-	local rightHand = torso.CFrame * CFrame.new(handW, 0.45 + handH, -0.35 - reach) * armOrientR
-	local leftHand = torso.CFrame * CFrame.new(-handW, 0.45 + handH, -0.35 - reach) * armOrientL
-
-	-- when looking, swing arms with look yaw but keep shoulder height from torso
-	if looking then
-		local shoulderR = (torso.CFrame * CFrame.new(handW, 0.45 + handH, 0)).Position
-		local shoulderL = (torso.CFrame * CFrame.new(-handW, 0.45 + handH, 0)).Position
-		local look = headCF.LookVector
-		rightHand = CFrame.lookAt(shoulderR, shoulderR + look) * CFrame.new(0, 0, -0.4 - reach * 0.5) * armOrientR
-		leftHand = CFrame.lookAt(shoulderL, shoulderL + look) * CFrame.new(0, 0, -0.4 - reach * 0.5) * armOrientL
-	end
-
-	-- gun: aim right arm at cursor from body shoulder
 	local tool = char:FindFirstChildOfClass("Tool")
 	if tool then
 		local mouse = LocalPlayer:GetMouse()
 		local hitPos = mouse and mouse.Hit and mouse.Hit.Position
 		if hitPos then
-			local shoulder = (torso.CFrame * CFrame.new(handW, 0.5 + handH, -0.1)).Position
-			rightHand = CFrame.lookAt(shoulder, hitPos) * CFrame.new(0, 0, -0.4 - reach * 0.2) * armOrientR
+			local shoulder = (face * CFrame.new(handW, handH + 0.3, 0)).Position
+			rightHand = CFrame.lookAt(shoulder, hitPos) * CFrame.new(0, 0, -0.5 - reach * 0.25)
 		end
 	end
 
