@@ -88,6 +88,7 @@ local ST = {
 	WatermarkMainVisible = true,
 	WatermarkBindsVisible = true,
 	WatermarkWorldVisible = true,
+	WatermarkAmmoVisible = true,
 	isUnloaded = false,
 	SilentAimEnabled = false,
 	SilentAimFOV = 90,
@@ -2371,15 +2372,14 @@ end
 local function vrForceUnanchor(char)
 	if not char then return end
 	pcall(function()
+		-- arms/head only — never touch HRP/Torso velocity (stop + left-fling)
 		for _, n in ipairs({
-			"Right Arm", "Left Arm", "Head", "Torso", "UpperTorso", "HumanoidRootPart",
+			"Right Arm", "Left Arm", "Head",
 			"RightUpperArm", "LeftUpperArm", "RightLowerArm", "LeftLowerArm",
 		}) do
 			local part = char:FindFirstChild(n)
 			if part and part:IsA("BasePart") then
 				part.Anchored = false
-				part.AssemblyLinearVelocity = Vector3.zero
-				part.AssemblyAngularVelocity = Vector3.zero
 			end
 		end
 	end)
@@ -2411,7 +2411,7 @@ UIS.InputChanged:Connect(function(input)
 		* CFrame.Angles(math.rad(-d.Y * 0.35), 0, 0)
 end)
 
--- VR swing: visual palm slap + Grabmove at end of swing (dump VR LMB path)
+-- VR swing input: start fist animation (no Grabmove)
 local VRSwingSide = 1
 local VRSwingActive = false
 local VRSwingPhase = 0
@@ -2438,27 +2438,23 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 	local cam = workspace.CurrentCamera
 
-	-- dump: VR camera/body path only runs when NOT Ragdoll; Stunned pins cam to Head
-	local function vrBlocked()
-		if not ST.VREnabled then return true end
-		if not char or not hum or not hrp then return true end
-		if hum.Health <= 0 then return true end
-		if hum.PlatformStand then return true end
-		local stOk, st = pcall(function() return hum:GetState() end)
-		if stOk and (st == Enum.HumanoidStateType.Dead or st == Enum.HumanoidStateType.Physics) then
-			return true
-		end
-		-- truthy ragdoll/downed (dump uses GetAttribute("Ragdoll"))
+	-- VR off / dead / ragdoll → teardown only if was active (never touch HRP physics when idle)
+	local blocked = false
+	if not ST.VREnabled then
+		blocked = true
+	elseif not char or not hum or not hrp then
+		blocked = true
+	elseif hum.Health <= 0 or hum.PlatformStand then
+		blocked = true
+	else
 		local r = char:GetAttribute("Ragdoll")
-		if r == true or r == 1 or r == "true" then return true end
 		local d = char:GetAttribute("Downed")
-		if d == true or d == 1 then return true end
-		return false
+		if r == true or r == 1 or d == true or d == 1 then blocked = true end
+		local ok, st = pcall(function() return hum:GetState() end)
+		if ok and st == Enum.HumanoidStateType.Dead then blocked = true end
 	end
 
-	if vrBlocked() then
-		-- Only teardown if VR was actually active. Never touch physics when VR is simply off
-		-- (was zeroing velocity every frame → turtle walk / feather fall).
+	if blocked then
 		if vrDidInit or (char and char:GetAttribute("DID_VR")) then
 			pcall(vrShutdown)
 			vrDidInit = false
@@ -2467,29 +2463,20 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		return
 	end
 
-	-- spawn grace
 	local spawnT = char:GetAttribute("CLL_SpawnT")
 	if typeof(spawnT) == "number" and (tick() - spawnT) < 2.0 then
 		return
 	end
 
-	-- alive + VR on → (re)init after death
 	if not vrDidInit or not char:GetAttribute("DID_VR") then
 		vrInitCharacter(char)
 	end
 
 	local looking = UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-
-	-- cursor: free when not RMB; only soft-lock while aiming
 	pcall(function()
 		UIS.MouseIconEnabled = true
-		if looking then
-			UIS.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
-		else
-			UIS.MouseBehavior = Enum.MouseBehavior.Default
-		end
+		UIS.MouseBehavior = looking and Enum.MouseBehavior.LockCurrentPosition or Enum.MouseBehavior.Default
 	end)
-
 	pcall(function()
 		hum.CameraOffset = Vector3.zero
 		char:SetAttribute("VR_CAMERA_RECOIL", Vector3.zero)
@@ -2500,20 +2487,28 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	local headPart = char:FindFirstChild("Head")
 	local headPos = (headPart and headPart.Position) or (hrp.Position + Vector3.new(0, 1.5, 0))
 
-	local headCF
+	local mouse = LocalPlayer:GetMouse()
+	local hitPos = mouse and mouse.Hit and mouse.Hit.Position
+	if typeof(hitPos) ~= "Vector3" then
+		hitPos = headPos + torsoCF.LookVector * 50
+	end
+
+	-- head always looks at cursor
+	local headCF = CFrame.lookAt(headPos, hitPos)
+	pcall(function()
+		local neck = torso:FindFirstChild("Neck")
+		if neck and neck:IsA("Motor6D") and headPart then
+			neck.C0 = torso.CFrame:ToObjectSpace(CFrame.lookAt(headPos, hitPos)) * CFrame.new(0, headPart.Size.Y * 0.5, 0)
+		end
+	end)
+
 	if looking then
 		headCF = CFrame.new(headPos) * VR_Cam_Rotation
 		if cam then
-			if cam.CameraType ~= Enum.CameraType.Scriptable then
-				cam.CameraType = Enum.CameraType.Scriptable
-			end
+			cam.CameraType = Enum.CameraType.Scriptable
 			cam.CFrame = headCF
 		end
 	else
-		-- body yaw; NEVER Scriptable / never force CameraMode
-		local yaw = select(2, hrp.CFrame:ToOrientation())
-		headCF = CFrame.new(headPos) * CFrame.Angles(0, yaw, 0)
-		-- do not overwrite free-look pitch into yaw-only every frame while still holding residuals
 		if cam and cam.CameraType == Enum.CameraType.Scriptable then
 			cam.CameraType = Enum.CameraType.Custom
 			cam.CameraSubject = hum
@@ -2523,74 +2518,64 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	local reach = math.clamp(ST.VRHandExtend or 0, 0, 10)
 	local handH = ST.VRHandHeight or 0.2
 	local handW = math.clamp(ST.VRHandWidth or 1.05, 0.3, 2.5)
-	local look = headCF.LookVector
-	local flat = Vector3.new(look.X, 0, look.Z)
-	if flat.Magnitude < 0.05 then flat = Vector3.new(0, 0, -1) else flat = flat.Unit end
-	local face = CFrame.lookAt(torsoCF.Position, torsoCF.Position + flat)
-	-- +X right, +Y height, -Z forward
-	local rightHand = face * CFrame.new(handW, handH, -0.55 - reach)
-	local leftHand = face * CFrame.new(-handW, handH, -0.55 - reach)
 
-	local tool = char:FindFirstChildOfClass("Tool")
-	if tool then
-		local mouse = LocalPlayer:GetMouse()
-		local hitPos = mouse and mouse.Hit and mouse.Hit.Position
-		if hitPos then
-			local shoulder = (face * CFrame.new(handW, handH + 0.3, 0)).Position
-			rightHand = CFrame.lookAt(shoulder, hitPos) * CFrame.new(0, 0, -0.5 - reach * 0.25)
-		end
+	-- BOTH fists always track cursor (R6: -90X so fist faces target)
+	local function fistFrom(shoulderPos, target, extra)
+		local dir = target - shoulderPos
+		if dir.Magnitude < 0.05 then dir = torsoCF.LookVector else dir = dir.Unit end
+		local cf = CFrame.lookAt(shoulderPos, shoulderPos + dir) * CFrame.Angles(math.rad(-90), 0, 0)
+		if extra then cf = cf * extra end
+		return cf
+	end
+	local shoulderR = (torsoCF * CFrame.new(handW, 0.5 + handH, -0.15 - reach * 0.15)).Position
+	local shoulderL = (torsoCF * CFrame.new(-handW, 0.5 + handH, -0.15 - reach * 0.15)).Position
+	local rightHand = fistFrom(shoulderR, hitPos, nil)
+	local leftHand = fistFrom(shoulderL, hitPos, nil)
+
+	-- gun: right arm horizontal while still aiming
+	if char:FindFirstChildOfClass("Tool") then
+		rightHand = fistFrom(shoulderR, hitPos, CFrame.Angles(0, 0, math.rad(90)))
 	end
 
 	-- optional VR target pose
 	local vrTargets = (ST.VRTargetEnabled and GetVRTargets and GetVRTargets()) or {}
 	if ST.VRTargetEnabled and #vrTargets > 0 and vrTargets[1].head then
 		local th = vrTargets[1].head
-		rightHand = CFrame.new(th.Position + Vector3.new(0.35, 0, 0)) * CFrame.Angles(math.rad(-70), 0, math.rad(20))
-		leftHand = CFrame.new(th.Position + Vector3.new(-0.35, 0, 0)) * CFrame.Angles(math.rad(-70), 0, math.rad(-20))
+		rightHand = fistFrom(th.Position + Vector3.new(0.35, 0, 0), th.Position, nil)
+		leftHand = fistFrom(th.Position + Vector3.new(-0.35, 0, 0), th.Position, nil)
 	end
 
 	if ST.VRShakeEnabled then
-		vrHandShakeSeed += dt * 40
+		vrHandShakeSeed = (vrHandShakeSeed or 0) + dt * 40
 		local s = (ST.VRShakeIntensity or 0.5) * 0.5
 		rightHand = rightHand * CFrame.new(math.sin(vrHandShakeSeed) * s, math.cos(vrHandShakeSeed * 1.3) * s, 0)
 		leftHand = leftHand * CFrame.new(math.sin(vrHandShakeSeed + 2) * s, math.cos(vrHandShakeSeed + 2) * s, 0)
 	end
 
-	-- Palm slap animation: local arm sweep only (no Grabmove — that grabs players)
+	-- fist punch animation toward cursor
 	if VRSwingActive then
 		local spd = ST.VRSwingSpeed or 14
 		local amp = ST.VRSwingAmp or 1.8
 		VRSwingPhase = VRSwingPhase + dt * spd
-		local tphase = math.clamp(VRSwingPhase / math.pi, 0, 1)
-		local swing = math.sin(tphase * math.pi)
-		local torsoPos = torsoCF.Position
-		local lookFlat = Vector3.new(headCF.LookVector.X, 0, headCF.LookVector.Z)
-		if lookFlat.Magnitude < 0.05 then lookFlat = Vector3.new(0, 0, -1) else lookFlat = lookFlat.Unit end
+		local swing = math.sin(math.clamp(VRSwingPhase / math.pi, 0, 1) * math.pi)
 		local sideSign = VRSwingSide > 0 and 1 or -1
-		local side = Vector3.new(-lookFlat.Z, 0, lookFlat.X) * sideSign
-		local shoulderPos = torsoPos + side * (handW or 1.05) + Vector3.new(0, 0.45 + (handH or 0.2), 0)
-		local reachS = 1.15 + amp * swing
-		local mid = shoulderPos
-			+ lookFlat * reachS * swing
-			+ side * (0.85 * (1 - swing))
-			+ Vector3.new(0, 0.25 * (1 - swing), 0)
-		local handCF = CFrame.lookAt(mid, mid + lookFlat) * CFrame.Angles(0, 0, math.rad(90 * sideSign))
-		if sideSign > 0 then rightHand = handCF else leftHand = handCF end
+		local sh = sideSign > 0 and shoulderR or shoulderL
+		local toHit = hitPos - sh
+		if toHit.Magnitude < 0.05 then toHit = headCF.LookVector else toHit = toHit.Unit end
+		local mid = sh - toHit * (0.55 * (1 - swing)) + toHit * ((0.9 + reach * 0.35 + amp) * swing)
+		local fist = CFrame.lookAt(mid, mid + toHit) * CFrame.Angles(math.rad(-90), 0, 0)
+		if sideSign > 0 then rightHand = fist else leftHand = fist end
 		if VRSwingPhase >= math.pi then
 			VRSwingActive = false
 			VRSwingPhase = 0
-			-- NO Grabmove: that remote GRABS players. Hitreg = arm CFrame via VR_UPDATE only.
 		end
 	end
 
-	-- drive ARMS only (never Head)
 	local function driveLimb(name, worldCF)
 		local limb = char:FindFirstChild(name)
 		if not limb or not limb:IsA("BasePart") then return end
 		limb.CanCollide = false
 		limb.Anchored = true
-		limb.AssemblyLinearVelocity = Vector3.zero
-		limb.AssemblyAngularVelocity = Vector3.zero
 		limb.CFrame = worldCF
 	end
 	driveLimb("Right Arm", rightHand)
@@ -2606,7 +2591,7 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		char:SetAttribute("VR_ROOTPART_CFRAME", hrp.CFrame)
 	end)
 
-	if tick() - vrLastUpdate >= 0.033 and FxRemote then
+	if tick() - (vrLastUpdate or 0) >= 0.033 and FxRemote then
 		vrLastUpdate = tick()
 		pcall(function()
 			FxRemote:FireServer("VR_UPDATE", {
@@ -2621,7 +2606,7 @@ end)
 
 LocalPlayer.CharacterAdded:Connect(function(c)
 	vrDidInit = false
-	VR_Cam_Rotation = CFrame.new()
+	VR_Cam_Rotation = CFrame.Angles(0, 0, 0)
 	pcall(function()
 		if c then
 			c:SetAttribute("CLL_SpawnT", tick())
@@ -2631,7 +2616,14 @@ LocalPlayer.CharacterAdded:Connect(function(c)
 	end)
 	pcall(function()
 		vrRestoreShoulders()
-		vrForceUnanchor(c)
+		if c then
+			for _, n in ipairs({"Right Arm", "Left Arm", "Head"}) do
+				local part = c:FindFirstChild(n)
+				if part and part:IsA("BasePart") then
+					part.Anchored = false
+				end
+			end
+		end
 		releaseVRCamera()
 	end)
 	task.defer(function()
@@ -3737,7 +3729,8 @@ local function buildSettings()
     local y = 18
 	toggle(leftScroll, y, "Watermark Main", function(v) ST.WatermarkMainVisible = v; watermarkMain.Visible = v end, true); y += 48
 	toggle(leftScroll, y, "Watermark Binds", function(v) ST.WatermarkBindsVisible = v; watermarkBinds.Visible = v end, true); y += 48
-	toggle(leftScroll, y, "Watermark World", function(v) ST.WatermarkWorldVisible = v; watermarkWorld.Visible = v end, true); y += 64
+	toggle(leftScroll, y, "Watermark World", function(v) ST.WatermarkWorldVisible = v; watermarkWorld.Visible = v end, true); y += 48
+	toggle(leftScroll, y, "Watermark Ammo", function(v) ST.WatermarkAmmoVisible = v; if ammoLbl then ammoLbl.Visible = v and lastClientAmmo ~= nil end end, true); y += 64
 	
 	local animLbl = label({ Text = "UI Animation: " .. tostring(AnimName), TextSize = 13, Size = UDim2.new(1, -40, 0, 20), Position = UDim2.fromOffset(PAD, y), Parent = leftScroll }); y += 25
 	local animBtn = new("TextButton", { Text = "Cycle preset", Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = Theme.Text, Size = UDim2.fromOffset(120, 28), Position = UDim2.fromOffset(PAD, y), BackgroundColor3 = Theme.Row, AutoButtonColor = false, Parent = leftScroll }, { corner(8), stroke() }); y += 48
@@ -4639,7 +4632,15 @@ LocalPlayer.CharacterAdded:Connect(hookCharTools)
 
 RunService.RenderStepped:Connect(function()
 	if ST.isUnloaded then return end
-	if not ammoLbl.Visible then return end
+	local show = ST.WatermarkAmmoVisible ~= false
+	if not show then
+		ammoLbl.Visible = false
+		return
+	end
+	if lastClientAmmo ~= nil then
+		ammoLbl.Visible = true
+		ammoLbl.Text = string.format("%d / %d", lastClientAmmo, lastMaxAmmo or lastClientAmmo)
+	end
 	local m = UIS:GetMouseLocation()
 	ammoLbl.Position = UDim2.fromOffset(m.X, m.Y + 28)
 end)
