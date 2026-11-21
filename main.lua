@@ -1439,7 +1439,7 @@ local function stopLocalInvis()
 		if hum then
 			hum.PlatformStand = false
 			hum.AutoRotate = true
-			hum.WalkSpeed = ST.WalkSpeedEnabled and ST.WalkSpeedValue or 16
+			if ST.WalkSpeedEnabled then hum.WalkSpeed = ST.WalkSpeedValue end
 		end
 		local cam = workspace.CurrentCamera
 		if cam and hum then
@@ -1551,7 +1551,7 @@ local function startLocalInvis()
 			d:Destroy()
 		elseif d:IsA("Humanoid") then
 			d.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
-			d.WalkSpeed = ST.WalkSpeedEnabled and ST.WalkSpeedValue or 16
+			if ST.WalkSpeedEnabled then d.WalkSpeed = ST.WalkSpeedValue end
 			d.JumpPower = 50
 			d.PlatformStand = false
 		end
@@ -1698,39 +1698,40 @@ RunService.Heartbeat:Connect(function()
 		if AntiCC_Flags.Stunned then
 			pcall(function() if humanoid:GetAttribute("Stunned") then humanoid:SetAttribute("Stunned", nil) end end)
 		end
-		if humanoid.WalkSpeed < 16 and not ST.WalkSpeedEnabled then humanoid.WalkSpeed = 16 end
+		-- NEVER force WalkSpeed=16 here: game sprint/base speeds get clamped → "turtle"
 	end
-	-- idle safety: if VR/Fly/Invis off, never leave arms anchored or HRP locked
+	-- idle safety: VR/Fly/Invis off → free arms/HRP, restore motors, strip OUR movers only
 	if not ST.VREnabled and not ST.FlyEnabled and not ST.LocalInvisEnabled then
 		pcall(function()
 			if root.Anchored then root.Anchored = false end
 			for _, n in ipairs({"Right Arm", "Left Arm", "Head"}) do
-				local p = char:FindFirstChild(n)
-				if p and p:IsA("BasePart") and p.Anchored then
-					p.Anchored = false
+				local part = char:FindFirstChild(n)
+				if part and part:IsA("BasePart") and part.Anchored then
+					part.Anchored = false
 				end
 			end
-			-- restore shoulders if left disabled by a half-dead VR session
 			local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
 			if torso then
-				for _, n in ipairs({"Right Shoulder", "Left Shoulder", "RightShoulder", "LeftShoulder"}) do
+				for _, n in ipairs({"Right Shoulder", "Left Shoulder", "RightShoulder", "LeftShoulder", "Neck"}) do
 					local m = torso:FindFirstChild(n)
-					if m and m:IsA("Motor6D") and m.Enabled == false then
+					if m and m:IsA("Motor6D") and not m.Enabled then
 						m.Enabled = true
 					end
 				end
 			end
-			-- strip leftover movers from our cheats
 			for _, inst in ipairs(root:GetChildren()) do
-				if inst:IsA("BodyVelocity") or inst:IsA("BodyGyro") or inst:IsA("BodyPosition") then
-					if inst.Name:find("CLL") or inst == flyVelocity or inst == flyGyro then
+				local isMover = inst:IsA("BodyVelocity") or inst:IsA("BodyGyro") or inst:IsA("BodyPosition")
+					or inst:IsA("LinearVelocity") or inst:IsA("AngularVelocity") or inst:IsA("AlignOrientation")
+				if isMover then
+					local named = (inst.Name or ""):find("CLL")
+					if named or inst == flyVelocity or inst == flyGyro then
 						inst:Destroy()
 					end
 				end
 			end
-			if not ST.WalkSpeedEnabled and humanoid.WalkSpeed > 0 and humanoid.WalkSpeed < 14 then
-				humanoid.WalkSpeed = 16
-			end
+			-- if fly leftovers still referenced
+			if flyVelocity and not ST.FlyEnabled then pcall(function() flyVelocity:Destroy() end); flyVelocity = nil end
+			if flyGyro and not ST.FlyEnabled then pcall(function() flyGyro:Destroy() end); flyGyro = nil end
 		end)
 	end
 	if ST.NoRecoilEnabled then
@@ -2520,18 +2521,28 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	local headPart = char:FindFirstChild("Head")
 	local headPos = (headPart and headPart.Position) or (hrp.Position + Vector3.new(0, 1.5, 0))
 
-	local mouse = LocalPlayer:GetMouse()
-	local hitPos = mouse and mouse.Hit and mouse.Hit.Position
-	if typeof(hitPos) ~= "Vector3" then
-		hitPos = headPos + torsoCF.LookVector * 50
+	-- AIM POINT = center of screen (all axes), same for head + both hands
+	local aimPos
+	if cam then
+		local vp = cam.ViewportSize
+		local ray = cam:ViewportPointToRay(vp.X * 0.5, vp.Y * 0.5)
+		aimPos = ray.Origin + ray.Direction * 120
+		-- short raycast for depth when possible
+		local rp = RaycastParams.new()
+		rp.FilterType = Enum.RaycastFilterType.Exclude
+		rp.FilterDescendantsInstances = { char }
+		local hit = workspace:Raycast(ray.Origin, ray.Direction * 200, rp)
+		if hit then aimPos = hit.Position end
+	else
+		aimPos = headPos + torsoCF.LookVector * 50
 	end
 
-	-- head always looks at cursor
-	local headCF = CFrame.lookAt(headPos, hitPos)
+	-- head tracks screen center (pitch+yaw)
+	local headCF = CFrame.lookAt(headPos, aimPos)
 	pcall(function()
 		local neck = torso:FindFirstChild("Neck")
 		if neck and neck:IsA("Motor6D") and headPart then
-			neck.C0 = torso.CFrame:ToObjectSpace(CFrame.lookAt(headPos, hitPos)) * CFrame.new(0, headPart.Size.Y * 0.5, 0)
+			neck.C0 = torso.CFrame:ToObjectSpace(CFrame.lookAt(headPos, aimPos)) * CFrame.new(0, headPart.Size.Y * 0.5, 0)
 		end
 	end)
 
@@ -2540,6 +2551,8 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		if cam then
 			cam.CameraType = Enum.CameraType.Scriptable
 			cam.CFrame = headCF
+			-- when free-looking, aim follows look direction
+			aimPos = headCF.Position + headCF.LookVector * 120
 		end
 	else
 		if cam and cam.CameraType == Enum.CameraType.Scriptable then
@@ -2552,9 +2565,11 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	local handH = ST.VRHandHeight or 0.2
 	local handW = math.clamp(ST.VRHandWidth or 1.05, 0.3, 2.5)
 
-	-- BOTH fists always track cursor (R6: -90X so fist faces target)
+	-- BOTH arms always track screen-center aim (with or without tool)
+	-- R6: long axis Y → -90 X so fist faces aim
 	local function fistFrom(shoulderPos, target, extra)
 		local dir = target - shoulderPos
+		if dir.Magnitude < 0.05 then dir = (aimPos - shoulderPos) end
 		if dir.Magnitude < 0.05 then dir = torsoCF.LookVector else dir = dir.Unit end
 		local cf = CFrame.lookAt(shoulderPos, shoulderPos + dir) * CFrame.Angles(math.rad(-90), 0, 0)
 		if extra then cf = cf * extra end
@@ -2562,13 +2577,16 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	end
 	local shoulderR = (torsoCF * CFrame.new(handW, 0.5 + handH, -0.15 - reach * 0.15)).Position
 	local shoulderL = (torsoCF * CFrame.new(-handW, 0.5 + handH, -0.15 - reach * 0.15)).Position
-	local rightHand = fistFrom(shoulderR, hitPos, nil)
-	local leftHand = fistFrom(shoulderL, hitPos, nil)
+	local rightHand = fistFrom(shoulderR, aimPos, nil)
+	local leftHand = fistFrom(shoulderL, aimPos, nil)
 
-	-- gun: right arm horizontal while still aiming
+	-- weapon: only extra roll on RIGHT arm (still aims center)
 	if char:FindFirstChildOfClass("Tool") then
-		rightHand = fistFrom(shoulderR, hitPos, CFrame.Angles(0, 0, math.rad(90)))
+		rightHand = fistFrom(shoulderR, aimPos, CFrame.Angles(0, 0, math.rad(90)))
 	end
+
+	-- alias for punch anim
+	local hitPos = aimPos
 
 	-- optional VR target pose
 	local vrTargets = (ST.VRTargetEnabled and GetVRTargets and GetVRTargets()) or {}
