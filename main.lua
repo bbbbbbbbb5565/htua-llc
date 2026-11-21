@@ -37,6 +37,7 @@ local ST = {
 	AntiCCEnabled = false,
 	SUK_MaxPerTick = 3,
 	TracersEnabled = false,
+	SparksEnabled = false,
 	TracerDuration = 0.5,
 	TracerSelfEnabled = true,
 	TracerOthersEnabled = true,
@@ -725,13 +726,16 @@ local function CreateTracer(origin, targetPos, color)
 	tween.Completed:Connect(function()
 		if part then part:Destroy() end
 	end)
-	-- sparks burst at muzzle, same color as tracer
-	pcall(function()
-		CreateSparks(origin, (targetPos - origin).Unit, color)
-	end)
+	-- sparks burst at muzzle, same color as tracer (optional toggle)
+	if ST.SparksEnabled then
+		pcall(function()
+			CreateSparks(origin, (targetPos - origin).Unit, color)
+		end)
+	end
 end
 
 function CreateSparks(origin, dir, color)
+	if not ST.SparksEnabled then return end
 	if typeof(origin) ~= "Vector3" then return end
 	color = color or ST.ColorSelf
 	dir = typeof(dir) == "Vector3" and dir.Magnitude > 0.01 and dir.Unit or Vector3.new(0, 0, -1)
@@ -964,6 +968,10 @@ local function GetTargets()
     end
     if anySelected then
         for target, on in pairs(SelectedTargets) do if on then addPlayer(target) end end
+        -- stale selection (dead/left): fall back to everyone
+        if #targets == 0 then
+            for _, plr in ipairs(Players:GetPlayers()) do addPlayer(plr) end
+        end
     else
         for _, plr in ipairs(Players:GetPlayers()) do addPlayer(plr) end
     end
@@ -992,8 +1000,18 @@ end
 --// ==================== COMBAT LOGIC ====================
 local function ReadAmmo(tool)
 	if not tool then return 0, 8 end
-	local current = tool:GetAttribute("CurrentAmmo") or (tool:FindFirstChild("CurrentAmmo") and tool.CurrentAmmo.Value) or 0
-	local max = tool:GetAttribute("MaxAmmo") or (tool:FindFirstChild("MaxAmmo") and tool.MaxAmmo.Value) or 8
+	-- dump Spas gates on ClientAmmo first
+	local current = tool:GetAttribute("ClientAmmo")
+	if current == nil then current = tool:GetAttribute("CurrentAmmo") end
+	if current == nil then
+		local cv = tool:FindFirstChild("CurrentAmmo")
+		if cv and (cv:IsA("NumberValue") or cv:IsA("IntValue")) then current = cv.Value end
+	end
+	local max = tool:GetAttribute("MaxAmmo")
+	if max == nil then
+		local mv = tool:FindFirstChild("MaxAmmo")
+		if mv and (mv:IsA("NumberValue") or mv:IsA("IntValue")) then max = mv.Value end
+	end
 	return tonumber(current) or 0, tonumber(max) or 8
 end
 
@@ -1245,43 +1263,39 @@ local function MultiFireAt()
 		local base = tool:FindFirstChild("Base")
 		fp = base and base:FindFirstChild("Firepoint")
 	end
-	if not fp then return end -- never fake origin from head/camera
-	local origin = fp.WorldPosition
+	local origin
+	if fp then
+		origin = fp.WorldPosition or (fp.Position)
+	else
+		-- last resort: right hand / HRP forward (still better than no shot)
+		local char = LocalPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		local hand = char and char:FindFirstChild("Right Arm")
+		origin = (hand and hand.Position) or (hrp and (hrp.Position + hrp.CFrame.LookVector * 1.5 + Vector3.new(0, 1.2, 0)))
+	end
+	if typeof(origin) ~= "Vector3" then return end
 	local dir = (aimPos - origin)
 	if dir.Magnitude < 0.05 then return end
 	dir = dir.Unit
 
-	-- dump Spas: server Fire once (damage), 8 Helper pellets for FX
-	-- aim every pellet at head so SUK registers
+	-- dump Spas onActivate: one Remotes.Fire + 8 Helper "Fire Bullet"
+	if not FireRemote then
+		pcall(function()
+			FireRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Fire")
+		end)
+	end
+	if not FireRemote then return end
+
 	local payload = {
 		velocity = 2000,
 		bullet = bulletModel,
 		origin = origin,
 		direction = dir,
 	}
+	-- direct FireServer (bypass any broken namecall edge-cases)
 	pcall(function()
 		FireRemote:FireServer(tool, "Fire", payload)
 	end)
-	-- extra server fires with tight spread around head for multi-hit register
-	for _ = 1, 3 do
-		local jitter = Vector3.new(
-			(math.random() - 0.5) * 0.15,
-			(math.random() - 0.5) * 0.15,
-			(math.random() - 0.5) * 0.15
-		)
-		local d2 = (aimPos + jitter - origin)
-		if d2.Magnitude > 0.05 then
-			local p2 = {
-				velocity = 2000,
-				bullet = bulletModel,
-				origin = origin,
-				direction = d2.Unit,
-			}
-			pcall(function()
-				FireRemote:FireServer(tool, "Fire", p2)
-			end)
-		end
-	end
 	markLocalShot(origin)
 
 	local function pelletDir(baseDir, minDeg, maxDeg)
@@ -1295,9 +1309,14 @@ local function MultiFireAt()
 			velocity = 2000,
 			bullet = bulletModel,
 			origin = origin,
-			direction = dir, -- pin to head aim, not random spray (damage path)
+			direction = dir, -- head-locked for SUK hitreg
 		}
 		HelperFire("Fx", "Fire Bullet", tool, p)
+	end
+	if ST.TracersEnabled and ST.TracerSelfEnabled then
+		CreateTracer(origin, aimPos, ST.ColorSelf)
+	elseif ST.SparksEnabled then
+		CreateSparks(origin, dir, ST.ColorSelf)
 	end
 
 	local ca = math.max(0, cur - 1)
@@ -2174,11 +2193,13 @@ task.spawn(function()
 			else
 				local ammo = select(1, ReadAmmo(tool))
 				if ammo <= 0 then
+					ST.reloadInProgress = false
                     InstantReload(tool)
-					waitTime = 0.1
+					waitTime = 0.15
 				else
+					ST.reloadInProgress = false
 					MultiFireAt()
-					waitTime = math.max(ST.SUK_FireDelay, 0.105)
+					waitTime = math.max(ST.SUK_FireDelay or 0.1, 0.08)
 				end
 			end
 		else
@@ -2241,10 +2262,11 @@ do
 			if ST.VREnabled then
 				pcall(function()
 					local char = LocalPlayer.Character
-					if char then
-						char:SetAttribute("DID_VR", true)
-						char:SetAttribute("VR", true)
-					end
+					local hum = char and char:FindFirstChildOfClass("Humanoid")
+					if not char or not hum or hum.Health <= 0 then return end
+					if char:GetAttribute("Ragdoll") or char:GetAttribute("Downed") then return end
+					char:SetAttribute("DID_VR", true)
+					char:SetAttribute("VR", true)
 				end)
 			end
 		end
@@ -2307,6 +2329,14 @@ end
 
 local function vrInitCharacter(char)
 	if not char then return end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if not hum or hum.Health <= 0 then return end
+	if char:GetAttribute("Ragdoll") or char:GetAttribute("Downed") then return end
+	-- don't re-init within spawn grace (stops death-loop after respawn)
+	local spawnT = char:GetAttribute("CLL_SpawnT")
+	if typeof(spawnT) == "number" and (tick() - spawnT) < 1.5 then
+		return
+	end
 	pcall(function()
 		char:SetAttribute("DID_VR", true)
 		char:SetAttribute("VR", true)
@@ -2320,25 +2350,41 @@ local function vrInitCharacter(char)
 		char:SetAttribute("VR_CAMERA_RECOIL", Vector3.zero)
 	end)
 	vrDisableShoulders(char)
-	-- dump: Head.CollisionGroup = "ViewModel" while tracked
-	local head = char:FindFirstChild("Head")
-	if head then pcall(function() head.CollisionGroup = "ViewModel" end) end
+	-- NEVER set Head CollisionGroup Default (caused resets/deaths)
 	if FxRemote then
 		pcall(function() FxRemote:FireServer("VR_INIT") end)
 	end
 	vrDidInit = true
 end
 
+local function vrForceUnanchor(char)
+	if not char then return end
+	pcall(function()
+		for _, n in ipairs({
+			"Right Arm", "Left Arm", "Head", "Torso", "UpperTorso", "HumanoidRootPart",
+			"RightUpperArm", "LeftUpperArm", "RightLowerArm", "LeftLowerArm",
+		}) do
+			local part = char:FindFirstChild(n)
+			if part and part:IsA("BasePart") then
+				part.Anchored = false
+				part.AssemblyLinearVelocity = Vector3.zero
+				part.AssemblyAngularVelocity = Vector3.zero
+			end
+		end
+	end)
+end
+
 local function vrShutdown()
 	local char = LocalPlayer.Character
 	releaseVRCamera()
 	vrRestoreShoulders()
+	vrForceUnanchor(char)
 	if char then
 		pcall(function()
 			char:SetAttribute("VR", false)
 			char:SetAttribute("DID_VR", false)
 			local head = char:FindFirstChild("Head")
-			if head then head.CollisionGroup = "Default" end
+			if head then pcall(function() head.CollisionGroup = "Default" end) end
 		end)
 	end
 	vrDidInit = false
@@ -2384,22 +2430,20 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 	local dead = (not hum) or (hum.Health <= 0) or (char and (char:GetAttribute("Ragdoll") or char:GetAttribute("Downed")))
+		or (hum and hum.PlatformStand)
 	if not cam or not char or not hrp or dead then
-		-- stop driving dead/ragdoll body (prevents death-loop fly)
-		pcall(function()
-			if char then
-				for _, n in ipairs({"Right Arm", "Left Arm", "RightUpperArm", "LeftUpperArm"}) do
-					local limb = char:FindFirstChild(n)
-					if limb and limb:IsA("BasePart") then
-						limb.Anchored = false
-						limb.AssemblyLinearVelocity = Vector3.zero
-						limb.AssemblyAngularVelocity = Vector3.zero
-					end
-				end
-				char:SetAttribute("DID_VR", false)
-			end
-		end)
-		vrDidInit = false
+		if vrDidInit or (char and char:GetAttribute("DID_VR")) then
+			pcall(vrShutdown)
+		else
+			vrForceUnanchor(char)
+			releaseVRCamera()
+		end
+		return
+	end
+	-- spawn grace: do not drive/init for 1.5s after CharacterAdded
+	local spawnT = char:GetAttribute("CLL_SpawnT")
+	if typeof(spawnT) == "number" and (tick() - spawnT) < 1.5 then
+		vrForceUnanchor(char)
 		releaseVRCamera()
 		return
 	end
@@ -2431,19 +2475,21 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 
 	local reach = math.clamp(ST.VRHandExtend or 1.2, 0, 12)
 	local handH = ST.VRHandHeight or 0.2
-	local handW = math.clamp(ST.VRHandWidth or 1.05, 0.3, 3)
-	local rightHand = headCF * CFrame.new(handW, -0.5 + handH, -0.8 - reach)
-	local leftHand = headCF * CFrame.new(-handW, -0.5 + handH, -0.8 - reach)
+	local handW = math.clamp(ST.VRHandWidth or 0.7, 0.3, 3)
+	-- R6 arm long-axis is Y: rotate -90X so arm points along look (-Z of headCF)
+	local armOrientR = CFrame.Angles(math.rad(-90), math.rad(-10), 0)
+	local armOrientL = CFrame.Angles(math.rad(-90), math.rad(10), 0)
+	local rightHand = headCF * CFrame.new(handW, -0.35 + handH, -0.55 - reach) * armOrientR
+	local leftHand = headCF * CFrame.new(-handW, -0.35 + handH, -0.55 - reach) * armOrientL
 
-	-- gun in hand: aim right arm toward cursor (mouse world hit)
+	-- gun equipped: aim right arm at cursor (shoulder from HRP, not floating cam)
 	local tool = char:FindFirstChildOfClass("Tool")
-	if tool and not looking then
+	if tool then
 		local mouse = LocalPlayer:GetMouse()
 		local hitPos = mouse and mouse.Hit and mouse.Hit.Position
 		if hitPos then
-			local shoulder = hrp.Position + Vector3.new(handW * 0.5, 1.0 + handH, 0)
-			rightHand = CFrame.lookAt(shoulder, hitPos) * CFrame.new(0, 0, -0.6 - reach * 0.35)
-				* CFrame.Angles(math.rad(-15), 0, 0)
+			local shoulder = (hrp.CFrame * CFrame.new(handW * 0.85, 0.9 + handH, -0.2)).Position
+			rightHand = CFrame.lookAt(shoulder, hitPos) * CFrame.new(0, 0, -0.5 - reach * 0.25) * armOrientR
 		end
 	end
 
@@ -2504,19 +2550,30 @@ end)
 
 LocalPlayer.CharacterAdded:Connect(function(c)
 	vrDidInit = false
+	VR_Cam_Rotation = CFrame.new()
 	pcall(function()
 		if c then
+			c:SetAttribute("CLL_SpawnT", tick())
 			c:SetAttribute("DID_VR", false)
 			c:SetAttribute("VR", false)
 		end
 	end)
-	task.defer(function()
+	-- hard cleanup residual anchors from previous life
+	pcall(function()
+		vrRestoreShoulders()
+		vrForceUnanchor(c)
 		releaseVRCamera()
-		if not ST.VREnabled then return end
-		task.wait(0.8)
+	end)
+	task.defer(function()
+		task.wait(1.6)
 		local live = LocalPlayer.Character
 		local hum = live and live:FindFirstChildOfClass("Humanoid")
-		if live == c and ST.VREnabled and hum and hum.Health > 0 then
+		if live ~= c then return end
+		if not ST.VREnabled then
+			vrForceUnanchor(live)
+			return
+		end
+		if hum and hum.Health > 0 and not live:GetAttribute("Ragdoll") then
 			vrInitCharacter(live)
 		end
 	end)
@@ -3654,19 +3711,6 @@ local function buildSettings()
 	makeColorSlider(leftScroll, y, "G", hg, function(v, fill) hg = v; pushHat(); if fill then fill.BackgroundColor3 = Color3.new(0,hg,0) end end); y += 25
 	makeColorSlider(leftScroll, y, "B", hb, function(v, fill) hb = v; pushHat(); if fill then fill.BackgroundColor3 = Color3.new(0,0,hb) end end); y += 40
 
-	label({ Text = "WINGS COLOR", Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = Theme.Dim, Size = UDim2.fromOffset(240, 18), Position = UDim2.fromOffset(16, y), Parent = leftScroll }); y += 28
-	local wingC = Cosmetics.getWingsColor and Cosmetics.getWingsColor() or Color3.fromRGB(180, 80, 255)
-	local wr, wg, wb = wingC.R, wingC.G, wingC.B
-	local wingPrev = new("Frame", { Size = UDim2.fromOffset(44, 44), Position = UDim2.fromOffset(PAD, y), BackgroundColor3 = wingC, Parent = leftScroll }, { corner(8), stroke() }); y += 5
-	local function pushWing()
-		local c = Color3.new(wr, wg, wb)
-		wingPrev.BackgroundColor3 = c
-		pcall(function() Cosmetics.setWingsColor(c) end)
-	end
-	makeColorSlider(leftScroll, y, "R", wr, function(v, fill) wr = v; pushWing(); if fill then fill.BackgroundColor3 = Color3.new(wr,0,0) end end); y += 25
-	makeColorSlider(leftScroll, y, "G", wg, function(v, fill) wg = v; pushWing(); if fill then fill.BackgroundColor3 = Color3.new(0,wg,0) end end); y += 25
-	makeColorSlider(leftScroll, y, "B", wb, function(v, fill) wb = v; pushWing(); if fill then fill.BackgroundColor3 = Color3.new(0,0,wb) end end); y += 50
-
     local rejoinBtn = new("TextButton", { Text = "Rejoin", Size = UDim2.new(1, -40, 0, 40), Position = UDim2.fromOffset(20, 720), BackgroundColor3 = Theme.Row, Font = Enum.Font.GothamMedium, TextSize = 14, TextColor3 = Theme.Text, AutoButtonColor = false, Parent = leftScroll }, { corner(10), stroke() })
 	rejoinBtn.MouseButton1Click:Connect(function() game:GetService("TeleportService"):Teleport(game.PlaceId, LocalPlayer) end)
 
@@ -4311,7 +4355,8 @@ buildFeaturePage(pages.Effects, "EFFECTS", {
 	{ name = "Aim Visualizer", initial = true, onToggle = function(v) ST.TrueCrosshairEnabled = v; if aimDot then aimDot.Visible = v end; if aimRing then aimRing.Visible = v end end, buildDetail = nil },
 	{ name = "Bullet Tracers", initial = false, onToggle = function(v) ST.TracersEnabled = v end, buildDetail = function(d)
 		detailSlider(d, 1, "Duration", 0.1, 2, ST.TracerDuration, 0.1, function(v) ST.TracerDuration = v end)
-		detailToggle(d, 2, "My tracers", ST.TracerSelfEnabled, function(v) ST.TracerSelfEnabled = v end)
+		detailToggle(d, 2, "Sparks on shot", ST.SparksEnabled, function(v) ST.SparksEnabled = v end)
+		detailToggle(d, 3, "My tracers", ST.TracerSelfEnabled, function(v) ST.TracerSelfEnabled = v end)
 		detailColor(d, 3, "My color (red)", function() return ST.ColorSelf end, function(c) ST.ColorSelf = c end)
 		detailToggle(d, 4, "Players' tracers", ST.TracerOthersEnabled, function(v) ST.TracerOthersEnabled = v; ST.TracersOthers = v end)
 		detailColor(d, 5, "Players color (yellow)", function() return ST.ColorOthers end, function(c) ST.ColorOthers = c end)
