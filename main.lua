@@ -2424,32 +2424,35 @@ UIS.InputBegan:Connect(function(input, gp)
 end)
 
 RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, function(dt)
-	if ST.isUnloaded or not ST.VREnabled then
-		return
-	end
+	if ST.isUnloaded then return end
 
-	local cam = workspace.CurrentCamera
 	local char = LocalPlayer.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
-	local dead = (not hum) or (hum.Health <= 0) or (char and (char:GetAttribute("Ragdoll") or char:GetAttribute("Downed")))
-		or (hum and hum.PlatformStand)
-	if not cam or not char or not hrp or dead then
+	local cam = workspace.CurrentCamera
+
+	local dead = (not ST.VREnabled)
+		or (not char) or (not hum) or (not hrp)
+		or (hum.Health <= 0)
+		or char:GetAttribute("Ragdoll")
+		or char:GetAttribute("Downed")
+		or hum.PlatformStand
+
+	-- dead / ragdoll / VR off → fully disable VR, restore body
+	if dead then
 		if vrDidInit or (char and char:GetAttribute("DID_VR")) then
 			pcall(vrShutdown)
-		else
-			vrForceUnanchor(char)
-			releaseVRCamera()
 		end
 		return
 	end
-	-- spawn grace: do not drive/init for 1.5s after CharacterAdded
+
+	-- spawn grace
 	local spawnT = char:GetAttribute("CLL_SpawnT")
-	if typeof(spawnT) == "number" and (tick() - spawnT) < 2.5 then
-		vrForceUnanchor(char)
+	if typeof(spawnT) == "number" and (tick() - spawnT) < 2.0 then
 		return
 	end
 
+	-- alive + VR on → (re)init after death
 	if not vrDidInit or not char:GetAttribute("DID_VR") then
 		vrInitCharacter(char)
 	end
@@ -2457,49 +2460,72 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	local looking = UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
 	UIS.MouseIconEnabled = not looking
 
-	-- ALWAYS first-person while VR is on (no 3rd person body + floating arms)
+	-- camera like FOV-lock: first person, no Scriptable fly, kill recoil offsets
 	pcall(function()
 		LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
+		hum.CameraOffset = Vector3.zero
+		char:SetAttribute("VR_CAMERA_RECOIL", Vector3.zero)
 	end)
-	if cam.CameraType == Enum.CameraType.Scriptable then
-		cam.CameraType = Enum.CameraType.Custom
+	if cam then
+		if cam.CameraType ~= Enum.CameraType.Custom then
+			cam.CameraType = Enum.CameraType.Custom
+		end
+		cam.CameraSubject = hum
 	end
-	cam.CameraSubject = hum
 
-	-- Head basis ALWAYS from body (HRP), never from cam.CFrame
-	-- RMB: free look via VR_Cam_Rotation; released: character yaw only
-	local headPos = hrp.Position + Vector3.new(0, 1.5, 0)
+	-- BODY-LOCKED basis: arms/head never leave the character
+	local headPart = char:FindFirstChild("Head")
+	local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso") or hrp
+	local headPos = (headPart and headPart.Position) or (hrp.Position + Vector3.new(0, 1.5, 0))
+
 	local headCF
 	if looking then
+		-- free look, but pivot stays on real head position
 		headCF = CFrame.new(headPos) * VR_Cam_Rotation
 	else
-		local yaw = select(2, hrp.CFrame:ToOrientation())
-		headCF = CFrame.new(headPos) * CFrame.Angles(0, yaw, 0)
-		-- keep rotation in sync so RMB doesn't snap
-		VR_Cam_Rotation = CFrame.Angles(0, yaw, 0)
+		-- attached to body: real head CFrame (or torso yaw)
+		if headPart then
+			headCF = headPart.CFrame
+		else
+			local yaw = select(2, hrp.CFrame:ToOrientation())
+			headCF = CFrame.new(headPos) * CFrame.Angles(0, yaw, 0)
+		end
+		-- soft-sync look so next RMB doesn't snap hard
+		local y = select(2, headCF:ToOrientation())
+		VR_Cam_Rotation = CFrame.Angles(0, y, 0)
 	end
 
-	local reach = math.clamp(ST.VRHandExtend or 1.2, 0, 12)
-	local handH = ST.VRHandHeight or 0.2
-	local handW = math.clamp(ST.VRHandWidth or 0.7, 0.3, 3)
-	-- R6 arms: long axis is Y → aim forward along -Z of head
-	local armOrientR = CFrame.Angles(math.rad(-90), math.rad(-12), 0)
-	local armOrientL = CFrame.Angles(math.rad(-90), math.rad(12), 0)
-	local rightHand = headCF * CFrame.new(handW, -0.4 + handH, -0.5 - reach) * armOrientR
-	local leftHand = headCF * CFrame.new(-handW, -0.4 + handH, -0.5 - reach) * armOrientL
+	local reach = math.clamp(ST.VRHandExtend or 1.0, 0, 8)
+	local handH = ST.VRHandHeight or 0.15
+	local handW = math.clamp(ST.VRHandWidth or 0.65, 0.25, 2)
+	local armOrientR = CFrame.Angles(math.rad(-90), math.rad(-10), 0)
+	local armOrientL = CFrame.Angles(math.rad(-90), math.rad(10), 0)
 
-	-- gun equipped: aim right arm at cursor from shoulder on body
+	-- shoulders from TORSO (body), not floating cam
+	local rightHand = torso.CFrame * CFrame.new(handW, 0.45 + handH, -0.35 - reach) * armOrientR
+	local leftHand = torso.CFrame * CFrame.new(-handW, 0.45 + handH, -0.35 - reach) * armOrientL
+
+	-- when looking, swing arms with look yaw but keep shoulder height from torso
+	if looking then
+		local shoulderR = (torso.CFrame * CFrame.new(handW, 0.45 + handH, 0)).Position
+		local shoulderL = (torso.CFrame * CFrame.new(-handW, 0.45 + handH, 0)).Position
+		local look = headCF.LookVector
+		rightHand = CFrame.lookAt(shoulderR, shoulderR + look) * CFrame.new(0, 0, -0.4 - reach * 0.5) * armOrientR
+		leftHand = CFrame.lookAt(shoulderL, shoulderL + look) * CFrame.new(0, 0, -0.4 - reach * 0.5) * armOrientL
+	end
+
+	-- gun: aim right arm at cursor from body shoulder
 	local tool = char:FindFirstChildOfClass("Tool")
 	if tool then
 		local mouse = LocalPlayer:GetMouse()
 		local hitPos = mouse and mouse.Hit and mouse.Hit.Position
 		if hitPos then
-			local shoulder = (hrp.CFrame * CFrame.new(handW * 0.85, 0.85 + handH, -0.15)).Position
-			rightHand = CFrame.lookAt(shoulder, hitPos) * CFrame.new(0, 0, -0.45 - reach * 0.2) * armOrientR
+			local shoulder = (torso.CFrame * CFrame.new(handW, 0.5 + handH, -0.1)).Position
+			rightHand = CFrame.lookAt(shoulder, hitPos) * CFrame.new(0, 0, -0.4 - reach * 0.2) * armOrientR
 		end
 	end
 
-	-- optional VR target grab pose (only when VRTarget list active)
+	-- optional VR target pose
 	local vrTargets = (ST.VRTargetEnabled and GetVRTargets and GetVRTargets()) or {}
 	if ST.VRTargetEnabled and #vrTargets > 0 and vrTargets[1].head then
 		local th = vrTargets[1].head
@@ -2507,14 +2533,14 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		leftHand = CFrame.new(th.Position + Vector3.new(-0.35, 0, 0)) * CFrame.Angles(math.rad(-70), 0, math.rad(-20))
 	end
 
-	if ST.VRShakeEnabled or (#vrTargets > 0) then
-		vrHandShakeSeed += dt * ((#vrTargets > 0) and 55 or 40)
-		local s = (ST.VRShakeIntensity or 0.5) * ((#vrTargets > 0) and 1.6 or 1)
+	if ST.VRShakeEnabled then
+		vrHandShakeSeed += dt * 40
+		local s = (ST.VRShakeIntensity or 0.5) * 0.5
 		rightHand = rightHand * CFrame.new(math.sin(vrHandShakeSeed) * s, math.cos(vrHandShakeSeed * 1.3) * s, 0)
 		leftHand = leftHand * CFrame.new(math.sin(vrHandShakeSeed + 2) * s, math.cos(vrHandShakeSeed + 2) * s, 0)
 	end
 
-	-- Arms only: anchor + CFrame. Head NEVER anchored (prevents head drop).
+	-- drive ARMS only (never Head)
 	local function driveLimb(name, worldCF)
 		local limb = char:FindFirstChild(name)
 		if not limb or not limb:IsA("BasePart") then return end
@@ -2526,13 +2552,10 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 	end
 	driveLimb("Right Arm", rightHand)
 	driveLimb("Left Arm", leftHand)
-	-- keep head free so Neck motor / anims / FX stay alive
-	local headPart = char:FindFirstChild("Head")
 	if headPart and headPart:IsA("BasePart") and headPart.Anchored then
 		headPart.Anchored = false
 	end
 
-	-- attributes the game reads
 	pcall(function()
 		char:SetAttribute("VR_RIGHT_ARM_CFRAME", rightHand)
 		char:SetAttribute("VR_LEFT_ARM_CFRAME", leftHand)
@@ -2540,7 +2563,6 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		char:SetAttribute("VR_ROOTPART_CFRAME", hrp.CFrame)
 	end)
 
-	-- server update at ~30 Hz (dump: tick() - u71 < 0.033)
 	if tick() - vrLastUpdate >= 0.033 and FxRemote then
 		vrLastUpdate = tick()
 		pcall(function()
@@ -2570,16 +2592,11 @@ LocalPlayer.CharacterAdded:Connect(function(c)
 		releaseVRCamera()
 	end)
 	task.defer(function()
-		-- long grace: server often kills if VR_INIT fires mid-spawn
-		task.wait(2.5)
+		task.wait(2.0)
 		local live = LocalPlayer.Character
-		local hum = live and live:FindFirstChildOfClass("Humanoid")
+		local h = live and live:FindFirstChildOfClass("Humanoid")
 		if live ~= c then return end
-		if not ST.VREnabled then
-			vrForceUnanchor(live)
-			return
-		end
-		if hum and hum.Health > 0 and not live:GetAttribute("Ragdoll") and not live:GetAttribute("Downed") then
+		if ST.VREnabled and h and h.Health > 0 and not live:GetAttribute("Ragdoll") then
 			vrInitCharacter(live)
 		end
 	end)
@@ -4684,18 +4701,23 @@ RunService.RenderStepped:Connect(function()
 		end
 	end
 	if ST.AntiFlashEnabled then
-		local pg = LocalPlayer:FindFirstChild("PlayerGui")
-		if pg then
-			for _, gui in ipairs(pg:GetChildren()) do
-				local n = string.lower(gui.Name)
-				if n:find("vfx") or n:find("screenfx") or n:find("flash") then
-					for _, c in ipairs(gui:GetDescendants()) do
-						local cn = string.lower(c.Name)
-						if c:IsA("Frame") or c:IsA("ImageLabel") or c:IsA("ImageButton") then
-							if cn:find("flash") or cn:find("pulse") or cn:find("blind") or cn:find("black") or cn:find("overlay") then
-								c.Visible = false
-								if c:IsA("Frame") then c.BackgroundTransparency = 1 end
-								if c:IsA("ImageLabel") or c:IsA("ImageButton") then c.ImageTransparency = 1 end
+		-- throttle heavy GUI walk (was every frame → micro freezes)
+		_G.CLL_AF_ACC = (_G.CLL_AF_ACC or 0) + 1
+		if _G.CLL_AF_ACC >= 6 then
+			_G.CLL_AF_ACC = 0
+			local pg = LocalPlayer:FindFirstChild("PlayerGui")
+			if pg then
+				for _, gui in ipairs(pg:GetChildren()) do
+					local n = string.lower(gui.Name)
+					if n:find("vfx") or n:find("screenfx") or n:find("flash") then
+						for _, c in ipairs(gui:GetDescendants()) do
+							local cn = string.lower(c.Name)
+							if c:IsA("Frame") or c:IsA("ImageLabel") or c:IsA("ImageButton") then
+								if cn:find("flash") or cn:find("pulse") or cn:find("blind") or cn:find("black") or cn:find("overlay") then
+									c.Visible = false
+									if c:IsA("Frame") then c.BackgroundTransparency = 1 end
+									if c:IsA("ImageLabel") or c:IsA("ImageButton") then c.ImageTransparency = 1 end
+								end
 							end
 						end
 					end
