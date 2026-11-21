@@ -2133,28 +2133,53 @@ task.spawn(function()
 end)
 
 
---// ==================== VR (PC FAKE ARMS ONLY) ====================
--- CRITICAL: do NOT spoof VRService.VREnabled and do NOT FireServer("VR_INIT").
--- Game VR_INIT puts Head/Arms into Tracked mode: motor.Enabled=false + Anchored=true
--- → permanent statue, dead anims/FX. PC mode only drives local Motor6D.C1.
+--// ==================== VR ENABLED FORCE (dump: if not VRService.VREnabled then ...) ====================
 do
+	local VRS = game:GetService("VRService")
+	pcall(function()
+		local oldIdx
+		oldIdx = hookmetamethod(game, "__index", function(self, key)
+			if key == "VREnabled" and ST.VREnabled then
+				local ok, cn = pcall(function()
+					return self == VRS or self.ClassName == "VRService"
+				end)
+				if ok and cn then
+					return true
+				end
+			end
+			return oldIdx(self, key)
+		end)
+	end)
+	pcall(function()
+		local mt = getrawmetatable(game)
+		if not mt then return end
+		local old = mt.__index
+		setreadonly(mt, false)
+		mt.__index = function(self, key)
+			if key == "VREnabled" and ST.VREnabled then
+				local ok, cn = pcall(function() return self.ClassName end)
+				if ok and cn == "VRService" then return true end
+			end
+			if typeof(old) == "function" then return old(self, key) end
+			return rawget(self, key)
+		end
+		setreadonly(mt, true)
+	end)
 	task.spawn(function()
 		while not ST.isUnloaded do
 			task.wait(0.5)
-			local char = LocalPlayer.Character
-			if not char then
-			elseif not ST.VREnabled then
+			if ST.VREnabled then
 				pcall(function()
-					-- clear flags if something else set them
-					if char:GetAttribute("VR") then char:SetAttribute("VR", false) end
-					if char:GetAttribute("DID_VR") then char:SetAttribute("DID_VR", false) end
+					local char = LocalPlayer.Character
+					if char then
+						char:SetAttribute("DID_VR", true)
+						char:SetAttribute("VR", true)
+					end
 				end)
 			end
-			-- never write DID_VR/VR=true on PC path
 		end
 	end)
 end
-
 
 --// ==================== VR IMPLEMENTATION (dump-faithful) ====================
 -- Game path (from dump):
@@ -2165,10 +2190,6 @@ end
 
 local VR_Cam_Rotation = CFrame.new()
 local vrHandShakeSeed = 0
-local VRSwingPhase = 0
-local VRSwingActive = false
-local VRSwingSide = 1 -- 1 right, -1 left
-
 local vrDidInit = false
 local vrLastUpdate = 0
 local vrShoulders = {} -- Motor6D refs to re-enable on exit
@@ -2185,171 +2206,72 @@ local function releaseVRCamera()
 	end
 end
 
--- Dump-faithful: NEVER disable Neck, NEVER permanently disable shoulders.
--- We only rewrite Shoulder.C1 each frame (like real VR). Neck stays alive so
--- head/anims/FX don't die and the head never drops.
-local vrMotorC1 = {} -- [Motor6D] = original C1
-
-local function vrCacheShoulders(char)
+local function vrDisableShoulders(char)
 	vrShoulders = {}
-	vrMotorC1 = {}
 	local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
 	if not torso then return end
-	for _, name in ipairs({"Right Shoulder", "Left Shoulder", "RightShoulder", "LeftShoulder"}) do
+	for _, name in ipairs({"Right Shoulder", "Left Shoulder", "RightShoulder", "LeftShoulder", "Neck"}) do
 		local m = torso:FindFirstChild(name)
 		if m and m:IsA("Motor6D") then
 			vrShoulders[#vrShoulders + 1] = m
-			vrMotorC1[m] = m.C1
-			-- keep Enabled = true (dump path)
+			m.Enabled = false
 		end
 	end
 end
 
 local function vrRestoreShoulders()
-	for m, c1 in pairs(vrMotorC1) do
-		pcall(function()
-			if m and m.Parent then
-				m.C1 = c1
-				m.Enabled = true
-			end
-		end)
-	end
 	for _, m in ipairs(vrShoulders) do
 		pcall(function() if m and m.Parent then m.Enabled = true end end)
 	end
 	vrShoulders = {}
-	vrMotorC1 = {}
 	local char = LocalPlayer.Character
 	if not char then return end
-	-- safety: never leave limbs anchored
-	for _, n in ipairs({"Right Arm", "Left Arm", "Head", "Torso", "UpperTorso", "HumanoidRootPart",
-		"RightLowerArm", "LeftLowerArm", "RightUpperArm", "LeftUpperArm"}) do
-		local part = char:FindFirstChild(n)
-		if part and part:IsA("BasePart") then
-			part.Anchored = false
+	for _, n in ipairs({"Right Arm", "Left Arm", "Head", "RightLowerArm", "LeftLowerArm", "RightUpperArm", "LeftUpperArm"}) do
+		local p = char:FindFirstChild(n)
+		if p and p:IsA("BasePart") then
+			p.Anchored = false
 		end
-	end
-	-- re-enable ANY motor that might have been killed by an older build
-	for _, d in ipairs(char:GetDescendants()) do
-		if d:IsA("Motor6D") then
-			pcall(function() d.Enabled = true end)
-		end
-	end
-end
-_G.CLL_vrRestore = vrRestoreShoulders
-
-local function vrDriveArmByC1(motorName, worldCF, char)
-	local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
-	if not torso then return end
-	local m = torso:FindFirstChild(motorName)
-	if not (m and m:IsA("Motor6D") and m.Part1) then return end
-	-- dump: C1 = (Torso.CFrame * C0 * Transform):ToObjectSpace(worldArmCF):Inverse()
-	local ok, c1 = pcall(function()
-		return (torso.CFrame * m.C0 * m.Transform):ToObjectSpace(worldCF):Inverse()
-	end)
-	if ok and typeof(c1) == "CFrame" then
-		m.C1 = c1
-		m.Enabled = true
-	end
-	-- soft un-anchor if something else anchored the limb
-	local limb = m.Part1
-	if limb and limb.Anchored then
-		limb.Anchored = false
 	end
 end
 
 local function vrInitCharacter(char)
 	if not char then return end
-	local hum = char:FindFirstChildOfClass("Humanoid")
-	local hrp = char:FindFirstChild("HumanoidRootPart")
-	if not hum or hum.Health <= 0 or not hrp then return end
-	-- PC fake-VR only: cache shoulder C1. NEVER set DID_VR/VR, NEVER FireServer VR_INIT.
-	-- Those flags kick the game's VR_INIT Tracked path → Anchor head/arms → statue.
-	vrCacheShoulders(char)
-	-- ensure limbs free
-	for _, n in ipairs({"Head", "Right Arm", "Left Arm", "Torso", "HumanoidRootPart"}) do
-		local part = char:FindFirstChild(n)
-		if part and part:IsA("BasePart") then
-			part.Anchored = false
-		end
-	end
-	local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
-	if torso then
-		for _, name in ipairs({"Right Shoulder", "Left Shoulder", "Neck", "RightShoulder", "LeftShoulder"}) do
-			local m = torso:FindFirstChild(name)
-			if m and m:IsA("Motor6D") then
-				m.Enabled = true
-			end
-		end
+	pcall(function()
+		char:SetAttribute("DID_VR", true)
+		char:SetAttribute("VR", true)
+		char:SetAttribute("VR_HEAD_CFRAME", CFrame.new())
+		char:SetAttribute("VR_RIGHT_ARM_CFRAME", CFrame.new())
+		char:SetAttribute("VR_LEFT_ARM_CFRAME", CFrame.new())
+		char:SetAttribute("VR_ROOTPART_CFRAME", CFrame.new())
+		char:SetAttribute("VR_RIGHT_ARM_RECOIL", CFrame.new())
+		char:SetAttribute("VR_LEFT_ARM_RECOIL", CFrame.new())
+		char:SetAttribute("VR_RIGHT_ARM_OFFSET", CFrame.new())
+		char:SetAttribute("VR_CAMERA_RECOIL", Vector3.zero)
+	end)
+	vrDisableShoulders(char)
+	-- dump: Head.CollisionGroup = "ViewModel" while tracked
+	local head = char:FindFirstChild("Head")
+	if head then pcall(function() head.CollisionGroup = "ViewModel" end) end
+	if FxRemote then
+		pcall(function() FxRemote:FireServer("VR_INIT") end)
 	end
 	vrDidInit = true
 end
 
 local function vrShutdown()
 	local char = LocalPlayer.Character
+	releaseVRCamera()
 	vrRestoreShoulders()
 	if char then
 		pcall(function()
 			char:SetAttribute("VR", false)
 			char:SetAttribute("DID_VR", false)
-			for _, part in ipairs(char:GetDescendants()) do
-				if part:IsA("BasePart") then
-					part.Anchored = false
-				elseif part:IsA("Motor6D") then
-					part.Enabled = true
-				end
-			end
-			local hum = char:FindFirstChildOfClass("Humanoid")
-			if hum then
-				hum.PlatformStand = false
-				hum.AutoRotate = true
-			end
+			local head = char:FindFirstChild("Head")
+			if head then head.CollisionGroup = "Default" end
 		end)
 	end
 	vrDidInit = false
-	task.spawn(function()
-		for i = 1, 20 do
-			releaseVRCamera()
-			local cam = workspace.CurrentCamera
-			local live = LocalPlayer.Character
-			local hum = live and live:FindFirstChildOfClass("Humanoid")
-			if cam and hum then
-				cam.CameraType = Enum.CameraType.Custom
-				cam.CameraSubject = hum
-			end
-			UIS.MouseIconEnabled = true
-			-- keep unanchoring for a bit in case game VR residual fires
-			if live then
-				for _, part in ipairs(live:GetChildren()) do
-					if part:IsA("BasePart") and part.Anchored then
-						part.Anchored = false
-					end
-				end
-			end
-			task.wait(0.03)
-		end
-	end)
 end
-
-
--- VR swing bind (default LMB, rebindable in VR tab)
-UIS.InputBegan:Connect(function(input, gp)
-	if gp or ST.isUnloaded or not ST.VREnabled then return end
-	local bind = Keys.VRSwing or Enum.UserInputType.MouseButton1
-	local hit = false
-	if typeof(bind) == "EnumItem" then
-		if bind.EnumType == Enum.UserInputType and input.UserInputType == bind then
-			hit = true
-		elseif bind.EnumType == Enum.KeyCode and input.KeyCode == bind then
-			hit = true
-		end
-	end
-	if hit and not VRSwingActive then
-		VRSwingActive = true
-		VRSwingPhase = 0
-		VRSwingSide = (VRSwingSide or 1) * -1
-	end
-end)
 
 UIS.InputChanged:Connect(function(input)
 	if not ST.VREnabled then return end
@@ -2361,35 +2283,17 @@ UIS.InputChanged:Connect(function(input)
 		* CFrame.Angles(math.rad(-d.Y * 0.35), 0, 0)
 end)
 
-local vrWasOn = false
 RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, function(dt)
-	if ST.isUnloaded then return end
-	if not ST.VREnabled then
-		if vrWasOn then
-			vrWasOn = false
-			pcall(vrShutdown)
-		end
+	if ST.isUnloaded or not ST.VREnabled then
 		return
 	end
-	vrWasOn = true
 
 	local cam = workspace.CurrentCamera
 	local char = LocalPlayer.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 	if not cam or not hum or not hrp or hum.Health <= 0 then
-		-- dead: stop VR packets (they re-kill / launch the next body)
-		vrDidInit = false
-		pcall(function()
-			hrp.AssemblyLinearVelocity = Vector3.zero
-			hrp.AssemblyAngularVelocity = Vector3.zero
-		end)
 		releaseVRCamera()
-		return
-	end
-
-	-- don't init in the first second of a life (spawn kill / fly-up)
-	if tick() - (char:GetAttribute("CLL_SpawnT") or 0) < 1.2 then
 		return
 	end
 
@@ -2413,130 +2317,70 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		headCF = cam.CFrame
 	end
 
-	-- 10.8 idle: hands offset in head/camera space (same direction you look)
-	local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso") or hrp
-	local torsoCF = torso and torso.CFrame or hrp.CFrame
-	local reach = math.clamp(ST.VRHandExtend or 0, 0, 12)
-	local handH = ST.VRHandHeight or 0
-	local handW = math.clamp(ST.VRHandWidth or 0.7, 0.3, 3)
-	-- 10.8 numbers: ±0.7, -0.5, -0.8-reach relative to headCF
-	local rightHand = headCF * CFrame.new(handW, -0.5 + handH, -0.8 - reach)
-	local leftHand = headCF * CFrame.new(-handW, -0.5 + handH, -0.8 - reach)
+	local reach = math.clamp(ST.VRHandExtend or 0, 0, 100)
+	local rightHand = headCF * CFrame.new(0.7, -0.5, -0.8 - reach)
+	local leftHand = headCF * CFrame.new(-0.7, -0.5, -0.8 - reach)
 
-	-- VR target: body + hands to selected players (slightly above head so hits register)
-	local vrTargets = (ST.VRTargetEnabled and GetVRTargets and GetVRTargets()) or {}
-	if ST.VRTargetEnabled and #vrTargets > 0 and vrTargets[1].head then
+	-- optional target punch (hand teleport + shake)
+	local vrTargets = GetVRTargets and GetVRTargets() or {}
+	if #vrTargets > 0 and vrTargets[1].head then
 		local th = vrTargets[1].head
-		local above = th.Position + Vector3.new(0, 3.2, 0)
-		-- teleport whole body near target
-		pcall(function()
-			hrp.CFrame = CFrame.new(above, th.Position)
-			hrp.AssemblyLinearVelocity = Vector3.zero
-		end)
 		rightHand = CFrame.new(th.Position + Vector3.new(0.35, 0, 0)) * CFrame.Angles(math.rad(-70), 0, math.rad(20))
 		leftHand = CFrame.new(th.Position + Vector3.new(-0.35, 0, 0)) * CFrame.Angles(math.rad(-70), 0, math.rad(-20))
-		headCF = CFrame.new(above, th.Position)
 	end
 
-	-- auto shake when targeting, or manual shake toggle
-	if ST.VRShakeEnabled or (ST.VRTargetEnabled and #vrTargets > 0) then
+	if ST.VRShakeEnabled or (#vrTargets > 0) then
 		vrHandShakeSeed += dt * ((#vrTargets > 0) and 55 or 40)
 		local s = (ST.VRShakeIntensity or 0.5) * ((#vrTargets > 0) and 1.6 or 1)
 		rightHand = rightHand * CFrame.new(math.sin(vrHandShakeSeed) * s, math.cos(vrHandShakeSeed * 1.3) * s, 0)
 		leftHand = leftHand * CFrame.new(math.sin(vrHandShakeSeed + 2) * s, math.cos(vrHandShakeSeed + 2) * s, 0)
 	end
 
-		-- 10.8-style swing in head space + reach; hit = Kick (real PC path)
-	if VRSwingActive then
-		local spd = ST.VRSwingSpeed or 14
-		local swingReach = math.clamp(ST.VRSwingReach or ST.VRSwingAmp or 2.5, 0.5, 8)
-		local handW = math.clamp(ST.VRHandWidth or 0.7, 0.3, 3)
-		local handH = ST.VRHandHeight or 0
-		VRSwingPhase = VRSwingPhase + dt * spd
-		local t = math.clamp(VRSwingPhase / math.pi, 0, 1)
-		local strike = math.sin(t * math.pi) -- 0→1→0
-		local sideSign = VRSwingSide > 0 and 1 or -1
-		-- base like 10.8 idle; during strike push further along -Z (forward in head space)
-		local x = sideSign * handW * (1 - 0.25 * strike)
-		local y = -0.5 + handH + 0.15 * (1 - strike)
-		local z = -0.8 - (ST.VRHandExtend or 0) - swingReach * strike
-		local handCF = headCF * CFrame.new(x, y, z)
-			* CFrame.Angles(math.rad(-40 * strike), math.rad(10 * sideSign), math.rad(20 * sideSign))
-		if sideSign > 0 then rightHand = handCF else leftHand = handCF end
-
-		if t >= 0.48 and t < 0.48 + (dt * spd / math.pi) + 0.02 then
-			if not rawget(_G, "CLL_VR_HIT_TICK") or _G.CLL_VR_HIT_TICK ~= math.floor(VRSwingPhase * 10) then
-				_G.CLL_VR_HIT_TICK = math.floor(VRSwingPhase * 10)
-				pcall(function()
-					local look = headCF.LookVector
-					local flat = Vector3.new(look.X, 0, look.Z)
-					if flat.Magnitude > 0.05 and hrp then
-						local pos = hrp.Position
-						hrp.CFrame = CFrame.new(pos, pos + flat.Unit)
-					end
-					if not SwingRemote then return end
-					SwingRemote:FireServer("Kick")
-					local arm = sideSign > 0 and "RIGHT_ARM" or "LEFT_ARM"
-					SwingRemote:FireServer("Grabmove", arm)
-				end)
-			end
-		end
-		if VRSwingPhase >= math.pi then
-			VRSwingActive = false
-			VRSwingPhase = 0
-			_G.CLL_VR_HIT_TICK = nil
-		end
+	-- dump VR_INIT Tracked mode: anchor limbs and set CFrame relative to HRP attrs
+	local function driveLimb(name, worldCF)
+		local limb = char:FindFirstChild(name)
+		if not limb or not limb:IsA("BasePart") then return end
+		limb.CanCollide = false
+		limb.Anchored = true
+		limb.AssemblyLinearVelocity = Vector3.zero
+		limb.AssemblyAngularVelocity = Vector3.zero
+		limb.CFrame = worldCF
 	end
+	driveLimb("Right Arm", rightHand)
+	driveLimb("Left Arm", leftHand)
+	driveLimb("Head", headCF)
 
--- Soft drive: C1 only. Never anchor. Re-enable motors if game disabled them.
+	-- attributes the game reads
 	pcall(function()
-		vrDriveArmByC1("Right Shoulder", rightHand, char)
-		vrDriveArmByC1("Left Shoulder", leftHand, char)
-		vrDriveArmByC1("RightShoulder", rightHand, char)
-		vrDriveArmByC1("LeftShoulder", leftHand, char)
+		char:SetAttribute("VR_RIGHT_ARM_CFRAME", rightHand)
+		char:SetAttribute("VR_LEFT_ARM_CFRAME", leftHand)
+		char:SetAttribute("VR_HEAD_CFRAME", headCF)
+		char:SetAttribute("VR_ROOTPART_CFRAME", hrp.CFrame)
 	end)
-	-- anti-statue residual (do NOT leave Anchored true on anything)
-	for _, n in ipairs({"Right Arm", "Left Arm", "Head", "Torso", "HumanoidRootPart", "UpperTorso"}) do
-		local limb = char:FindFirstChild(n)
-		if limb and limb:IsA("BasePart") and limb.Anchored then
-			limb.Anchored = false
-		end
-	end
-	if hum and hum.PlatformStand then
-		hum.PlatformStand = false
-	end
-	local torsoM = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
-	if torsoM then
-		for _, name in ipairs({"Right Shoulder", "Left Shoulder", "Neck", "RightShoulder", "LeftShoulder"}) do
-			local m = torsoM:FindFirstChild(name)
-			if m and m:IsA("Motor6D") and not m.Enabled then
-				m.Enabled = true
-			end
-		end
-	end
 
-	-- PC fake-VR: local attributes only for our own logic. NO VR_UPDATE / VR_INIT to server.
-	-- Sending those packets made the game treat the body as Tracked → anchors / dead hits.
-	pcall(function()
-		char:SetAttribute("CLL_VR_RIGHT", rightHand)
-		char:SetAttribute("CLL_VR_LEFT", leftHand)
-	end)
+	-- server update at ~30 Hz (dump: tick() - u71 < 0.033)
+	if tick() - vrLastUpdate >= 0.033 and FxRemote then
+		vrLastUpdate = tick()
+		pcall(function()
+			FxRemote:FireServer("VR_UPDATE", {
+				VR_RIGHT_ARM_CFRAME = rightHand,
+				VR_LEFT_ARM_CFRAME = leftHand,
+				VR_HEAD_CFRAME = headCF,
+				VR_ROOTPART_CFRAME = hrp.CFrame,
+			})
+		end)
+	end
 end)
 
-LocalPlayer.CharacterAdded:Connect(function(c)
+LocalPlayer.CharacterAdded:Connect(function()
 	vrDidInit = false
-	pcall(function() c:SetAttribute("CLL_SpawnT", tick()) end)
 	task.defer(function()
-		if not ST.VREnabled then
+		if ST.VREnabled then
+			task.wait(0.3)
+			local c = LocalPlayer.Character
+			if c and ST.VREnabled then vrInitCharacter(c) end
+		else
 			releaseVRCamera()
-			pcall(vrShutdown)
-			return
-		end
-		task.wait(1.2)
-		local live = LocalPlayer.Character
-		local hum = live and live:FindFirstChildOfClass("Humanoid")
-		if live == c and ST.VREnabled and hum and hum.Health > 0 then
-			vrInitCharacter(live)
 		end
 	end)
 end)
@@ -3002,16 +2846,9 @@ local window = new("CanvasGroup", { Size = UDim2.fromOffset(DESIGN_W, DESIGN_H),
 UIRefs.window = window
 window.Visible = false
 local uiScale = new("UIScale", { Parent = window })
-local baseScale = 1
-local animFactor = Instance.new("NumberValue")
-animFactor.Name = "CLL_AnimFactor"
-animFactor.Value = 1
-animFactor.Parent = window
-local function applyScale()
-	if uiScale then uiScale.Scale = math.max(baseScale * (animFactor and animFactor.Value or 1), 0.001) end
-end
+local baseScale = 1; local animFactor = new("NumberValue", { Value = 0 })
+local function applyScale() uiScale.Scale = math.max(baseScale * animFactor.Value, 0.001) end
 animFactor.Changed:Connect(applyScale)
-applyScale()
 function fit() local cam = workspace.CurrentCamera; if not cam then return end; local vs = cam.ViewportSize; baseScale = math.clamp(math.min((vs.X - 24) / DESIGN_W, (vs.Y - 24) / DESIGN_H), 0.4, 1); applyScale() end
 fit(); workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fit)
 
@@ -4501,61 +4338,21 @@ end)
 -- Open / Close
 local isOpen = false
 local tweens = {}
-local function play(obj, ti, goal)
-	if obj == nil then return nil end
-	local okType, isInst = pcall(function() return typeof(obj) == "Instance" end)
-	if not okType or not isInst then return nil end
-	if typeof(ti) ~= "TweenInfo" then
-		ti = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	end
-	local ok, tw = pcall(function()
-		return TweenService:Create(obj, ti, goal or {})
-	end)
-	if not ok or not tw then return nil end
-	pcall(function()
-		table.insert(tweens, tw)
-		tw:Play()
-	end)
-	return tw
-end
+local function play(obj, ti, goal) local t = TweenService:Create(obj, ti, goal); table.insert(tweens, t); t:Play(); return t end
 local function setOpen(state)
 	if state == isOpen then return end
 	isOpen = state
-	for _, t in ipairs(tweens) do pcall(function() t:Cancel() end) end
-	table.clear(tweens)
-	if not window then return end
-	pcall(function()
-		if not window.Parent then
-			window.Parent = (gethui and gethui()) or game:GetService("CoreGui")
-		end
-	end)
+	for _, t in ipairs(tweens) do t:Cancel() end; table.clear(tweens)
 	local A = AnimPresets[AnimName] or AnimPresets.Smooth
-	local oi = TweenInfo.new((A.open[3] or 0.5) * 0.85 / math.max(SPEED, 0.05), A.open[1], A.open[2])
-	local ci = TweenInfo.new((A.close[3] or 0.32) * 0.9 / math.max(SPEED, 0.05), A.close[1], A.close[2])
+	local oi = TweenInfo.new(A.open[3] * 0.85, A.open[1], A.open[2])
+	local ci = TweenInfo.new(A.close[3] * 0.9, A.close[1], A.close[2])
 	if state then
-		window.Visible = true
-		window.GroupTransparency = 1
-		if animFactor then animFactor.Value = A.scale or 0.93 end
-		if uiScale then uiScale.Scale = baseScale * (A.scale or 0.93) end
-		if animFactor then play(animFactor, oi, { Value = 1 }) end
-		play(window, TweenInfo.new(0.22, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), { GroupTransparency = 0 })
-		-- 10.8-style open; force opaque if tween stalls
-		task.delay(0.3, function()
-			if isOpen and window then
-				window.GroupTransparency = 0
-				if animFactor then animFactor.Value = 1 end
-				if uiScale then uiScale.Scale = baseScale end
-			end
-		end)
+		window.Visible = true; window.GroupTransparency = 1; animFactor.Value = A.scale
+		play(animFactor, oi, { Value = 1 }); play(window, TweenInfo.new(0.22, ES.Sine, ED.Out), { GroupTransparency = 0 })
 	else
-		if animFactor then play(animFactor, ci, { Value = A.scale or 0.93 }) end
-		local fade = play(window, TweenInfo.new(0.2, Enum.EasingStyle.Sine, Enum.EasingDirection.In), { GroupTransparency = 1 })
-		task.delay(0.25, function()
-			if not isOpen and window then
-				window.Visible = false
-				window.GroupTransparency = 1
-			end
-		end)
+		play(animFactor, ci, { Value = A.scale })
+		local fade = play(window, TweenInfo.new(0.2, ES.Sine, ED.In), { GroupTransparency = 1 })
+		fade.Completed:Connect(function(st) if st == Enum.PlaybackState.Completed and not isOpen then window.Visible = false end end)
 	end
 end
 
