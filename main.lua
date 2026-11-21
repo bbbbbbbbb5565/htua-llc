@@ -2846,7 +2846,7 @@ local window = new("CanvasGroup", { Size = UDim2.fromOffset(DESIGN_W, DESIGN_H),
 UIRefs.window = window
 window.Visible = false
 local uiScale = new("UIScale", { Parent = window })
-local baseScale = 1; local animFactor = new("NumberValue", { Value = 0 })
+local baseScale = 1; local animFactor = new("NumberValue", { Value = 0, Parent = gui })
 local function applyScale() uiScale.Scale = math.max(baseScale * animFactor.Value, 0.001) end
 animFactor.Changed:Connect(applyScale)
 function fit() local cam = workspace.CurrentCamera; if not cam then return end; local vs = cam.ViewportSize; baseScale = math.clamp(math.min((vs.X - 24) / DESIGN_W, (vs.Y - 24) / DESIGN_H), 0.4, 1); applyScale() end
@@ -4347,12 +4347,19 @@ local function setOpen(state)
 	local oi = TweenInfo.new(A.open[3] * 0.85, A.open[1], A.open[2])
 	local ci = TweenInfo.new(A.close[3] * 0.9, A.close[1], A.close[2])
 	if state then
-		window.Visible = true; window.GroupTransparency = 1; animFactor.Value = A.scale
-		play(animFactor, oi, { Value = 1 }); play(window, TweenInfo.new(0.22, ES.Sine, ED.Out), { GroupTransparency = 0 })
+		window.Visible = true
+		window.GroupTransparency = 0
+		animFactor.Value = A.scale
+		play(animFactor, oi, { Value = 1 })
 	else
 		play(animFactor, ci, { Value = A.scale })
-		local fade = play(window, TweenInfo.new(0.2, ES.Sine, ED.In), { GroupTransparency = 1 })
-		fade.Completed:Connect(function(st) if st == Enum.PlaybackState.Completed and not isOpen then window.Visible = false end end)
+		play(window, TweenInfo.new(0.2, ES.Sine, ED.In), { GroupTransparency = 1 })
+		task.delay(0.22, function()
+			if not isOpen and window then
+				window.Visible = false
+				window.GroupTransparency = 1
+			end
+		end)
 	end
 end
 
