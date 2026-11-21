@@ -569,10 +569,10 @@ local Cosmetics = (function()
 			local color = CFG.WingColor
 			for _, w in ipairs(state.wings) do
 				local s = w.s
-				-- EXACT v2 mount from pasted-text-2.txt
+				-- mount on shoulder blades / upper back, slight pitch, flap on roll
 				local base = tor.CFrame
-					* CFrame.new(s * 0.35, WING_Y, tor.Size.Z / 2 + 0.1)
-					* CFrame.Angles(0, -s * WING_YAW, 0)
+					* CFrame.new(s * 0.55, 0.55, 0.65)
+					* CFrame.Angles(math.rad(-8), -s * 0.55, 0)
 					* CFrame.Angles(0, 0, s * flap)
 				for _, it in ipairs(w.items) do
 					local rip = (0.12 + it.k * 0.025) * (0.4 + amp * 3) * math.sin(phase - it.k * 0.5)
@@ -1144,7 +1144,8 @@ local function MultiFireAt()
 	if not tool then return end
 	if tool.Parent ~= LocalPlayer.Character then return end
 
-	local cur = select(1, ReadAmmo(tool))
+	local cur, maxA = ReadAmmo(tool)
+	maxA = maxA or tool:GetAttribute("MaxAmmo") or 8
 	if cur <= 0 then return end
 
 	local bulletModel = BulletModel
@@ -1153,38 +1154,51 @@ local function MultiFireAt()
 			bulletModel = ReplicatedStorage:WaitForChild("Models", 1):WaitForChild("Bullets", 1):WaitForChild("Default", 1)
 		end)
 	end
+	if not bulletModel then return end
 
 	local targets = GetTargets()
 	local numTargets = #targets
 	if numTargets == 0 then return end
 
+	-- clear every client lock the Spas onActivate checks (dump)
 	pcall(function()
 		tool:SetAttribute("Cooldown", false)
 		tool:SetAttribute("ClientCooldownUntil", 0)
+		tool:SetAttribute("Debounce", false)
+		tool:SetAttribute("Reloading", false)
+		local char = LocalPlayer.Character
+		if char then
+			char:SetAttribute("Reloading", false)
+			-- don't touch Stunned/Ragdoll — those are real state
+		end
+		-- keep both ammo attrs in sync (Spas gates on CurrentAmmo AND ClientAmmo)
+		tool:SetAttribute("ClientAmmo", cur)
+		tool:SetAttribute("CurrentAmmo", cur)
+		local cv = tool:FindFirstChild("CurrentAmmo")
+		if cv and (cv:IsA("NumberValue") or cv:IsA("IntValue")) then
+			cv.Value = cur
+		end
 	end)
 
 	local data = targets[targetIndex]
 	targetIndex = (targetIndex % numTargets) + 1
 	if not (data and data.head and data.head.Parent) then return end
 	local head = data.head
+	local aimPos = head.Position
 
-	-- REAL firepoint origin (server validates distance to gun) + direction into head
+	-- REAL firepoint only — server validates distance to gun model
 	local fp = tool:FindFirstChild("Firepoint", true)
 	if not fp then
 		local base = tool:FindFirstChild("Base")
 		fp = base and base:FindFirstChild("Firepoint")
 	end
-	local origin
-	if fp then
-		origin = fp.WorldPosition
-	else
-		local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-		origin = myHead and myHead.Position or workspace.CurrentCamera.CFrame.Position
-	end
-	local dir = (head.Position - origin)
+	if not fp then return end -- never fake origin from head/camera
+	local origin = fp.WorldPosition
+	local dir = (aimPos - origin)
 	if dir.Magnitude < 0.05 then return end
 	dir = dir.Unit
 
+	-- dump Spas: one server Fire, then 8 client pellets with spread
 	local payload = {
 		velocity = 2000,
 		bullet = bulletModel,
@@ -1196,19 +1210,38 @@ local function MultiFireAt()
 	end)
 	markLocalShot(origin)
 
-	local maxA = tool:GetAttribute("MaxAmmo") or 8
-	local ca = tool:GetAttribute("ClientAmmo")
-	if typeof(ca) ~= "number" then ca = cur end
-	ca = math.max(0, ca - 1)
+	-- 8 client pellets (visual + any local listeners), same as dump u35 spread
+	local function pelletDir(baseDir, minDeg, maxDeg)
+		local base = CFrame.new(Vector3.new(), baseDir)
+		local roll = CFrame.fromOrientation(0, 0, math.random() * math.pi * 2)
+		local pitch = CFrame.fromOrientation(math.rad(minDeg + math.random() * (maxDeg - minDeg)), 0, 0)
+		return (base * roll * pitch).LookVector
+	end
+	for i = 0, 7 do
+		local p = {
+			velocity = 2000,
+			bullet = bulletModel,
+			origin = origin,
+			direction = pelletDir(dir, -7, 7),
+		}
+		HelperFire("Fx", "Fire Bullet", tool, p)
+	end
+
+	local ca = math.max(0, cur - 1)
 	pcall(function()
 		tool:SetAttribute("ClientAmmo", ca)
+		tool:SetAttribute("CurrentAmmo", ca)
+		local cv = tool:FindFirstChild("CurrentAmmo")
+		if cv and (cv:IsA("NumberValue") or cv:IsA("IntValue")) then
+			cv.Value = ca
+		end
 		HelperFire("Fx", "Ammo", ca, maxA, false)
 	end)
 	HelperFire("Gun Base", "Shot", tool)
 	HelperFire("Fx", "Hitmarker", head)
 
 	if ST.TracersEnabled and ST.TracerSelfEnabled then
-		CreateTracer(origin, head.Position, ST.ColorSelf)
+		CreateTracer(origin, aimPos, ST.ColorSelf)
 	end
 end
 
@@ -2224,34 +2257,78 @@ local function releaseVRCamera()
 	end
 end
 
-local function vrDisableShoulders(char)
+-- Dump-faithful: NEVER disable Neck, NEVER permanently disable shoulders.
+-- We only rewrite Shoulder.C1 each frame (like real VR). Neck stays alive so
+-- head/anims/FX don't die and the head never drops.
+local vrMotorC1 = {} -- [Motor6D] = original C1
+
+local function vrCacheShoulders(char)
 	vrShoulders = {}
+	vrMotorC1 = {}
 	local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
 	if not torso then return end
-	for _, name in ipairs({"Right Shoulder", "Left Shoulder", "RightShoulder", "LeftShoulder", "Neck"}) do
+	for _, name in ipairs({"Right Shoulder", "Left Shoulder", "RightShoulder", "LeftShoulder"}) do
 		local m = torso:FindFirstChild(name)
 		if m and m:IsA("Motor6D") then
 			vrShoulders[#vrShoulders + 1] = m
-			m.Enabled = false
+			vrMotorC1[m] = m.C1
+			-- keep Enabled = true (dump path)
 		end
 	end
 end
 
 local function vrRestoreShoulders()
+	for m, c1 in pairs(vrMotorC1) do
+		pcall(function()
+			if m and m.Parent then
+				m.C1 = c1
+				m.Enabled = true
+			end
+		end)
+	end
 	for _, m in ipairs(vrShoulders) do
 		pcall(function() if m and m.Parent then m.Enabled = true end end)
 	end
 	vrShoulders = {}
+	vrMotorC1 = {}
 	local char = LocalPlayer.Character
 	if not char then return end
-	for _, n in ipairs({"Right Arm", "Left Arm", "Head", "RightLowerArm", "LeftLowerArm", "RightUpperArm", "LeftUpperArm"}) do
-		local p = char:FindFirstChild(n)
-		if p and p:IsA("BasePart") then
-			p.Anchored = false
+	-- safety: never leave limbs anchored
+	for _, n in ipairs({"Right Arm", "Left Arm", "Head", "Torso", "UpperTorso", "HumanoidRootPart",
+		"RightLowerArm", "LeftLowerArm", "RightUpperArm", "LeftUpperArm"}) do
+		local part = char:FindFirstChild(n)
+		if part and part:IsA("BasePart") then
+			part.Anchored = false
+		end
+	end
+	-- re-enable ANY motor that might have been killed by an older build
+	for _, d in ipairs(char:GetDescendants()) do
+		if d:IsA("Motor6D") then
+			pcall(function() d.Enabled = true end)
 		end
 	end
 end
 _G.CLL_vrRestore = vrRestoreShoulders
+
+local function vrDriveArmByC1(motorName, worldCF, char)
+	local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+	if not torso then return end
+	local m = torso:FindFirstChild(motorName)
+	if not (m and m:IsA("Motor6D") and m.Part1) then return end
+	-- dump: C1 = (Torso.CFrame * C0 * Transform):ToObjectSpace(worldArmCF):Inverse()
+	local ok, c1 = pcall(function()
+		return (torso.CFrame * m.C0 * m.Transform):ToObjectSpace(worldCF):Inverse()
+	end)
+	if ok and typeof(c1) == "CFrame" then
+		m.C1 = c1
+		m.Enabled = true
+	end
+	-- soft un-anchor if something else anchored the limb
+	local limb = m.Part1
+	if limb and limb.Anchored then
+		limb.Anchored = false
+	end
+end
 
 local function vrInitCharacter(char)
 	if not char then return end
@@ -2272,7 +2349,7 @@ local function vrInitCharacter(char)
 		char:SetAttribute("VR_RIGHT_ARM_OFFSET", id)
 		char:SetAttribute("VR_CAMERA_RECOIL", Vector3.zero)
 	end)
-	vrDisableShoulders(char)
+	vrCacheShoulders(char)
 	if FxRemote then
 		pcall(function() FxRemote:FireServer("VR_INIT") end)
 	end
@@ -2430,58 +2507,62 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		leftHand = leftHand * CFrame.new(math.sin(vrHandShakeSeed + 2) * s, math.cos(vrHandShakeSeed + 2) * s, 0)
 	end
 
-		-- Palm slap: open hand faces look direction, sweep from the side (not a fist punch, not backwards)
+		-- Palm slap forward (where the character looks), not a reverse punch.
+	-- Arc: cocked to the side -> sweeps forward along lookFlat, palm faces target at impact.
 	if VRSwingActive then
 		local spd = ST.VRSwingSpeed or 14
 		local amp = ST.VRSwingAmp or 1.8
 		VRSwingPhase = VRSwingPhase + dt * spd
-		local tphase = math.clamp(VRSwingPhase / math.pi, 0, 1)
-		local swing = math.sin(tphase * math.pi)
+		local t = math.clamp(VRSwingPhase / math.pi, 0, 1) -- 0..1
+		local ease = math.sin(t * math.pi) -- 0 -> 1 -> 0
 		local torsoPos = (torsoCF or hrp.CFrame).Position
 		local lookFlat = Vector3.new(headCF.LookVector.X, 0, headCF.LookVector.Z)
 		if lookFlat.Magnitude < 0.05 then lookFlat = Vector3.new(0, 0, -1) else lookFlat = lookFlat.Unit end
 		local sideSign = VRSwingSide > 0 and 1 or -1
 		local side = Vector3.new(-lookFlat.Z, 0, lookFlat.X) * sideSign
-		local shoulderPos = torsoPos + side * 1.05 + Vector3.new(0, 0.45, 0)
-		-- 0 = cocked to the side, 1 = palm in front along look
-		local reach = 1.15 + amp * swing
+		local shoulderPos = torsoPos + side * 0.95 + Vector3.new(0, 0.55, 0)
+		-- cocked (t=0): out to the side + slightly back; impact (t=0.5): fully forward
+		local forwardAmt = (0.35 + amp) * ease
+		local sideAmt = 0.95 * (1 - ease)
+		local upAmt = 0.35 * (1 - ease)
 		local mid = shoulderPos
-			+ lookFlat * reach * swing
-			+ side * (0.85 * (1 - swing))
-			+ Vector3.new(0, 0.25 * (1 - swing), 0)
-		-- -Z (palm) faces lookFlat; roll puts the arm horizontal like a slap
-		local handCF = CFrame.lookAt(mid, mid + lookFlat) * CFrame.Angles(0, 0, math.rad(90 * sideSign))
+			+ lookFlat * forwardAmt
+			+ side * sideAmt
+			+ Vector3.new(0, upAmt, 0)
+		-- R6 arm: build so the palm (-Y of the part after orient) faces lookFlat
+		-- lookAt points arm "forward" (-Z) at target, then roll 90 so palm faces it
+		local handCF = CFrame.lookAt(mid, mid + lookFlat)
+			* CFrame.Angles(math.rad(-15), 0, math.rad(90 * sideSign))
 		if sideSign > 0 then rightHand = handCF else leftHand = handCF end
 		if VRSwingPhase >= math.pi then
 			VRSwingActive = false
 			VRSwingPhase = 0
 			pcall(function()
-				if FxRemote then FxRemote:FireServer("Swing") end
-				local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-				if remotes then
-					local sw = remotes:FindFirstChild("Swing") or remotes:FindFirstChild("Melee")
-					if sw and sw:IsA("RemoteEvent") then sw:FireServer("Swing") end
+				if SwingRemote then
+					SwingRemote:FireServer("Swing")
+				elseif FxRemote then
+					FxRemote:FireServer("Swing")
 				end
 			end)
 		end
 	end
 
--- drive arms only (anchored). Head not anchored — prevents full-body freeze.
-	local function driveArm(name, worldCF)
-		local limb = char:FindFirstChild(name)
-		if not limb or not limb:IsA("BasePart") then return end
-		limb.CanCollide = false
-		limb.Anchored = true
-		limb.AssemblyLinearVelocity = Vector3.zero
-		limb.AssemblyAngularVelocity = Vector3.zero
-		limb.CFrame = worldCF
-	end
-	driveArm("Right Arm", rightHand)
-	driveArm("Left Arm", leftHand)
+-- Drive arms via Motor6D.C1 (dump path). NEVER anchor limbs/head.
+	-- R6 names: "Right Shoulder" / "Left Shoulder"
 	pcall(function()
-		driveArm("RightUpperArm", rightHand)
-		driveArm("LeftUpperArm", leftHand)
+		vrDriveArmByC1("Right Shoulder", rightHand, char)
+		vrDriveArmByC1("Left Shoulder", leftHand, char)
+		-- R15 fallbacks if present
+		vrDriveArmByC1("RightShoulder", rightHand, char)
+		vrDriveArmByC1("LeftShoulder", leftHand, char)
 	end)
+	-- ensure limbs stay unanchored every frame
+	for _, n in ipairs({"Right Arm", "Left Arm", "Head"}) do
+		local limb = char:FindFirstChild(n)
+		if limb and limb:IsA("BasePart") and limb.Anchored then
+			limb.Anchored = false
+		end
+	end
 
 	-- attributes the game reads
 	pcall(function()
