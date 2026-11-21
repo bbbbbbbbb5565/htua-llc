@@ -2207,18 +2207,22 @@ task.spawn(function()
 					if hum and hum.PlatformStand and not ST.HealEnabled then
 						hum.PlatformStand = false
 					end
-					for _, d in ipairs(char:GetDescendants()) do
-						if d:IsA("BasePart") and d.Anchored then
-							if ST.FlyEnabled and d.Name == "HumanoidRootPart" then
-								-- leave fly root
+					-- only unanchor body parts we might have left stuck; NEVER mass-toggle all Motor6D
+					-- (game disables motors during anim/ragdoll/tool — forcing Enabled=true fights the animator)
+					for _, name in ipairs({"Head", "Torso", "UpperTorso", "LowerTorso", "HumanoidRootPart",
+						"Right Arm", "Left Arm", "Right Leg", "Left Leg",
+						"RightUpperArm", "LeftUpperArm", "RightLowerArm", "LeftLowerArm",
+						"RightUpperLeg", "LeftUpperLeg", "RightLowerLeg", "LeftLowerLeg"}) do
+						local part = char:FindFirstChild(name)
+						if part and part:IsA("BasePart") and part.Anchored then
+							if ST.FlyEnabled and name == "HumanoidRootPart" then
+								-- leave
 							else
-								d.Anchored = false
+								part.Anchored = false
 							end
 						end
-						if d:IsA("Motor6D") and not d.Enabled and not ST.VREnabled then
-							d.Enabled = true
-						end
 					end
+					-- restore only shoulder C1 we cached for VR, not every motor in the rig
 					if not ST.VREnabled and _G.CLL_vrRestore then
 						pcall(_G.CLL_vrRestore)
 					end
@@ -2560,12 +2564,17 @@ RunService:BindToRenderStep("CLL_VR", Enum.RenderPriority.Camera.Value + 1, func
 		if VRSwingPhase >= math.pi then
 			VRSwingActive = false
 			VRSwingPhase = 0
-			-- dump VR attack path: Grabmove with arm id (NOT plain "Swing")
+			-- face body to camera look so server Kick/Grabmove matches where YOU aim
 			pcall(function()
+				local look = headCF.LookVector
+				local flat = Vector3.new(look.X, 0, look.Z)
+				if flat.Magnitude > 0.05 and hrp then
+					local pos = hrp.Position
+					hrp.CFrame = CFrame.new(pos, pos + flat.Unit)
+				end
 				if not SwingRemote then return end
 				local arm = sideSign > 0 and "RIGHT_ARM" or "LEFT_ARM"
 				SwingRemote:FireServer("Grabmove", arm)
-				-- also fire Kick as fallback for non-VR hit detection on some builds
 				SwingRemote:FireServer("Kick")
 			end)
 		end
@@ -3081,7 +3090,7 @@ subscribeTheme(function() local s = fovCircle:FindFirstChildOfClass("UIStroke");
 local function cosmeticColor() return CosmeticUseCustom and CosmeticColorCustom or Theme.Accent end
 
 -- Window (No Auto Center, No Position Reset)
-local window = new("CanvasGroup", { Size = UDim2.fromOffset(DESIGN_W, DESIGN_H), Position = UDim2.fromOffset(100, 100), BackgroundColor3 = Theme.Bg, GroupTransparency = 1, Parent = gui }, { corner(18), stroke() })
+local window = new("CanvasGroup", { Size = UDim2.fromOffset(DESIGN_W, DESIGN_H), Position = UDim2.fromOffset(100, 100), BackgroundColor3 = Theme.Bg, GroupTransparency = 0, Visible = false, Parent = gui }, { corner(18), stroke() })
 UIRefs.window = window
 window.Visible = false
 local uiScale = new("UIScale", { Parent = window })
@@ -4617,24 +4626,29 @@ local function setOpen(state)
 	local closeInfo = preset.close
 	local startScale = preset.scale or 0.93
 	if state then
+		-- HARD show first (CanvasGroup stays invisible if tween never finishes)
 		window.Visible = true
-		window.GroupTransparency = 1
-		if animFactor then animFactor.Value = startScale end
-		if uiScale then uiScale.Scale = baseScale * startScale end
-		local tiOpen = TweenInfo.new((openInfo[3] or 0.35) / math.max(SPEED, 0.05), openInfo[1] or Enum.EasingStyle.Quint, openInfo[2] or Enum.EasingDirection.Out)
-		play(window, tiOpen, { GroupTransparency = 0 })
-		if animFactor then
-			play(animFactor, tiOpen, { Value = 1 })
-		end
+		window.GroupTransparency = 0
+		if animFactor then animFactor.Value = 1 end
+		if uiScale then uiScale.Scale = baseScale end
+		-- optional polish tween from slightly scaled
+		pcall(function()
+			if animFactor then
+				animFactor.Value = startScale
+				local tiOpen = TweenInfo.new((openInfo[3] or 0.35) / math.max(SPEED, 0.05), openInfo[1] or Enum.EasingStyle.Quint, openInfo[2] or Enum.EasingDirection.Out)
+				play(animFactor, tiOpen, { Value = 1 })
+			end
+		end)
 	else
 		local tiClose = TweenInfo.new((closeInfo[3] or 0.25) / math.max(SPEED, 0.05), closeInfo[1] or Enum.EasingStyle.Quart, closeInfo[2] or Enum.EasingDirection.In)
-		local tw = play(window, tiClose, { GroupTransparency = 1 })
+		play(window, tiClose, { GroupTransparency = 1 })
 		if animFactor then
 			play(animFactor, tiClose, { Value = startScale })
 		end
 		task.delay((closeInfo[3] or 0.25) / math.max(SPEED, 0.05) + 0.02, function()
 			if not isOpen and window then
 				window.Visible = false
+				window.GroupTransparency = 1
 			end
 		end)
 	end
@@ -4773,7 +4787,7 @@ RunService.RenderStepped:Connect(function()
 	end
 end)
 
--- BOOT SAFETY: never start with VR armed; clear residual anchors from prior inject
+-- BOOT SAFETY: VR off; clear residual anchors only on core body parts (not every Motor6D)
 ST.VREnabled = false
 pcall(function()
 	if _G.CLL_vrRestore then _G.CLL_vrRestore() end
@@ -4781,9 +4795,12 @@ pcall(function()
 	if char then
 		char:SetAttribute("VR", false)
 		char:SetAttribute("DID_VR", false)
-		for _, d in ipairs(char:GetDescendants()) do
-			if d:IsA("BasePart") and d.Anchored then d.Anchored = false end
-			if d:IsA("Motor6D") then d.Enabled = true end
+		for _, name in ipairs({"Head", "Torso", "UpperTorso", "LowerTorso", "HumanoidRootPart",
+			"Right Arm", "Left Arm", "Right Leg", "Left Leg"}) do
+			local part = char:FindFirstChild(name)
+			if part and part:IsA("BasePart") and part.Anchored then
+				part.Anchored = false
+			end
 		end
 		local hum = char:FindFirstChildOfClass("Humanoid")
 		if hum then hum.PlatformStand = false end
